@@ -281,6 +281,12 @@ setup_local_environment() {
     info "Executando configuração local..."
     bash src/scripts/local_setup.sh
     
+    # Configurar docker-env após setup
+    if command -v minikube &> /dev/null && minikube status -p local-k8s &> /dev/null; then
+        info "Configurando Docker para usar daemon do minikube..."
+        eval $(minikube docker-env -p local-k8s)
+    fi
+    
     log "Ambiente local configurado"
 }
 

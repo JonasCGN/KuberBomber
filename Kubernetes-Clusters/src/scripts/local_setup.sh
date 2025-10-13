@@ -172,29 +172,40 @@ create_minikube_cluster() {
         return 0
     fi
     
-    log "Criando cluster Kubernetes local com minikube..."
+    log "Criando cluster Kubernetes local com minikube (configuração otimizada)..."
     
-    # Criar cluster minikube com configurações específicas
+    # Criar cluster minikube MUITO mais rápido e leve
     minikube start \
         --profile=$CLUSTER_NAME \
-        --nodes=3 \
         --driver=docker \
-        --kubernetes-version=v1.28.0 \
-        --memory=4096 \
-        --cpus=2 \
-        --extra-config=kubelet.housekeeping-interval=10s \
-        --extra-config=kubelet.cgroups-per-qos=true \
-        --extra-config=kubelet.cgroup-driver=systemd
+        --disk-size=10g \
+        --container-runtime=docker \
+        --delete-on-failure=false
     
     # Configurar kubectl para usar o cluster
     kubectl config use-context $CLUSTER_NAME
     
-    # Habilitar addons úteis
-    minikube addons enable ingress -p $CLUSTER_NAME
-    minikube addons enable metrics-server -p $CLUSTER_NAME
-    minikube addons enable dashboard -p $CLUSTER_NAME
+    # Configurar Docker para usar o daemon do minikube (muito importante!)
+    log "Configurando Docker para usar daemon do minikube..."
+    eval $(minikube docker-env -p $CLUSTER_NAME)
     
-    log "Cluster criado com sucesso"
+    # Adicionar configuração permanente no ~/.bashrc
+    if ! grep -q "minikube docker-env" ~/.bashrc; then
+        echo "" >> ~/.bashrc
+        echo "# Configuração automática do minikube docker-env" >> ~/.bashrc
+        echo "if minikube status -p local-k8s &> /dev/null; then" >> ~/.bashrc
+        echo "    eval \$(minikube docker-env -p local-k8s)" >> ~/.bashrc
+        echo "fi" >> ~/.bashrc
+        log "Configuração automática adicionada ao ~/.bashrc"
+    fi
+    
+    # Habilitar apenas addons essenciais (mais rápido)
+    log "Habilitando addons essenciais..."
+    minikube addons enable ingress -p $CLUSTER_NAME &
+    minikube addons enable metrics-server -p $CLUSTER_NAME &
+    wait  # Aguardar addons em paralelo
+    
+    log "Cluster criado com sucesso (otimizado para velocidade)"
 }
 
 install_metallb() {

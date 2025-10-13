@@ -60,6 +60,12 @@ check_prerequisites() {
     # Usar contexto do cluster local
     kubectl config use-context $CLUSTER_NAME
     
+    # Configurar Docker para usar daemon do minikube
+    if command -v minikube &> /dev/null && minikube status -p $CLUSTER_NAME &> /dev/null; then
+        eval $(minikube docker-env -p $CLUSTER_NAME)
+        log "Docker configurado para usar daemon do minikube"
+    fi
+    
     log "Pré-requisitos OK - usando cluster minikube $CLUSTER_NAME"
 }
 
