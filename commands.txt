@@ -1,0 +1,3 @@
+#Rodar a simulação de falhas
+python main.py reliability start
+

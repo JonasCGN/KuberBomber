@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nginx-ingress-controller-monitor
+  namespace: nginx-ingress # O namespace onde o NGINX Ingress Controller está instalado
+  labels:
+    # Esta label DEVE CORRESPONDER ao seletor do seu Prometheus Operator.
+    # Conforme nossa depuração, o seletor era 'release: prometheus'.
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      # Estas labels devem corresponder às labels do seu Deployment/Pod do NGINX Ingress Controller.
+      # Verifique 'kubectl get pods -n nginx-ingress -l app.kubernetes.io/name=nginx-ingress -o yaml'
+      # e 'kubectl get svc nginx-ingress-controller -n nginx-ingress -o yaml'
+      app.kubernetes.io/name: nginx-ingress
+      app.kubernetes.io/instance: nginx-ingress
+  namespaceSelector:
+    matchNames:
+      - nginx-ingress # O namespace que o ServiceMonitor deve observar
+  endpoints:
+    - port: prometheus # O nome da porta no Service do NGINX Ingress Controller que expõe as métricas.
+      # Esta porta deve ser nomeada 'prometheus' no YAML do serviço.
+      path: /metrics # O caminho onde as métricas são expostas pelo NGINX Ingress Controller (padrão para Prometheus)
+      interval: 30s # Frequência de raspagem das métricas

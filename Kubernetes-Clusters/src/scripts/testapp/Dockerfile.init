@@ -1,0 +1,29 @@
+FROM ubuntu:18.04
+
+RUN apt-get update && apt-get install -y xvfb curl java-common &&\
+    curl https://cdn.azul.com/zulu/bin/zulu11.68.17-ca-fx-jdk11.0.21-linux_amd64.deb -o zulu11.68.17-ca-fx-jdk11.0.21-linux_amd64.deb && \
+    apt install -y ./zulu11.68.17-ca-fx-jdk11.0.21-linux_amd64.deb && \
+    update-alternatives --install /usr/bin/java java /usr/lib/jvm/zulu-fx-11-amd64/bin/java 2116800 && \
+    rm -rf zulu11.68.17-ca-fx-jdk11.0.21-linux_amd64.deb && \
+    apt-get clean autoclean && \
+    apt-get autoremove --yes && \
+    rm -rf /var/lib/{apt,dpkg,cache,log}
+
+ENV ENVIRONMENT="DOCKER"
+ENV ERROR="0.1"
+
+WORKDIR /app
+
+RUN mkdir project && \
+    mkdir project/models && \
+    mkdir project/output && \
+    mkdir /results && \
+    mkdir /results/data && \
+    mkdir /results/graph && \
+    mkdir models
+
+COPY model.xml src/main/resources/projects/iure/kubernatessurvivability/survivability_base_mtta.xml
+COPY boostrap.jar .
+
+ENTRYPOINT xvfb-run java -jar boostrap.jar
+

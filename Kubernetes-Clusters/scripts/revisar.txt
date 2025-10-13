@@ -1,0 +1,21 @@
+Identifiquei que os ServiceMonitors para kube-controller-manager, kube-scheduler, kube-etcd e kube-proxy estavam tentando acessar endpoints que não estão disponíveis no ambiente kind por padrão
+
+serviceMonitor/monitoring/prometheus-kube-prometheus-kube-controller-manager/0
+
+0 / 1 up
+
+
+serviceMonitor/monitoring/prometheus-kube-prometheus-kube-etcd/0
+
+0 / 1 up
+
+
+serviceMonitor/monitoring/prometheus-kube-prometheus-kube-proxy/0
+
+0 / 3 up
+
+
+serviceMonitor/monitoring/prometheus-kube-prometheus-kube-scheduler/0
+
+0 / 1 up
+

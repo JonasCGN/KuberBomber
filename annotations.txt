@@ -1,0 +1,35 @@
+=====================POD========================
+Garantir que ta funcionando
+
+Fazer um elemento
+
+watch kubectl 
+
+fazer um comando de falha
+# Executa comando para matar processo principal (PID 1)
+
+kubectl get pods
+cmd = f"kubectl exec {pod_name} -n {self.namespace} -- kill -9 1"
+
+watch kubectl get pods -n <namespace>
+
+Reação default
+
+Fazer uma tabela
+
+================================================
+
+
+
+=============================================
+Fazer com que exiba o comando que foi executado
+
+Utilizar os metodos existente de falha, criar uma classe qual que vou testar
+
+Capturar para ver se realmente ta falhando, Falhar N(default=30) vezes um componente
+(pod,processo(pod,worker_node,control plane),worker_node), e captura o tempo de recuperação(mttr),
+entre cada execução espera M(default=60) segundos, deve gerar um csv com os tempos entre o inicio 
+da falha e a recuperação, mais importante é o mttr
+
+Cada aplicação e componente do kubernet tem um mttf e mttr diferente
+=============================================
