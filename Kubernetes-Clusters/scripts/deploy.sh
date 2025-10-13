@@ -46,7 +46,7 @@ show_help() {
     echo ""
     echo "OPTIONS:"
     echo "  --aws              Habilita modo AWS (cria recursos na nuvem)"
-    echo "  --local            Força modo local (usa minikube/Docker)"
+    echo "  --local            Força modo local (usa kind/Docker)"
     echo "  --ubuntu           Usa deployments da versão Ubuntu (kubernetes_ubuntu/)"
     echo "  --setup            Apenas configura ambiente (não faz deploy)"
     echo "  --deploy           Apenas faz deploy (assume ambiente já configurado)"
@@ -69,7 +69,7 @@ show_help() {
     echo "  AWS_ENABLED=true $0       # Deploy AWS via variável de ambiente"
     echo ""
     echo "Pré-requisitos:"
-    echo "  Local: Docker, minikube, kubectl, helm"
+    echo "  Local: Docker, kind, kubectl, helm"
     echo "  AWS: AWS CLI configurado, CDK, Maven, Java"
 }
 
@@ -181,9 +181,9 @@ ensure_kubectl_working() {
         fi
     fi
 
-    warn "Tentando recuperar kubeconfig via minikube..."
+    warn "Tentando recuperar kubeconfig via kind..."
 
-    # Garantir que Docker funciona (necessário para minikube)
+    # Garantir que Docker funciona (necessário para kind)
     if ! docker ps &> /dev/null; then
         warn "Docker não está acessível. Possíveis soluções:"
         warn "1. Iniciar Docker: systemctl start docker (como root)"
@@ -194,36 +194,23 @@ ensure_kubectl_working() {
         warn "Tentando continuar mesmo assim..."
     fi
 
-    # Verificar se minikube está instalado
-    if ! command -v minikube &> /dev/null; then
-        error "minikube não está instalado"
-        return 1
-    fi
-
-    # Obter clusters disponíveis via minikube
-    clusters=$(minikube profile list -o json 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4 || echo "")
-    if [ -z "$clusters" ]; then
-        warn "Nenhum cluster minikube encontrado"
-        return 1
-    fi
-
-    cluster=$(echo "$clusters" | head -n1)
-
-    mkdir -p "$HOME/.kube"
-
-    # backup do config existente
-    if [ -f "$HOME/.kube/config" ]; then
-        cp "$HOME/.kube/config" "$HOME/.kube/config.backup.$(date +%s)" 2>/dev/null || true
-    fi
-
-    # recuperar kubeconfig do minikube
-    if minikube kubectl --profile="$cluster" -- config view --raw > "$HOME/.kube/config" 2>/dev/null; then
-        chmod 600 "$HOME/.kube/config" 2>/dev/null || true
-        export KUBECONFIG="$HOME/.kube/config"
-
-        if kubectl get nodes --request-timeout='5s' &> /dev/null; then
-            log "✅ kubectl auto-recuperado com sucesso (minikube)"
-            return 0
+    # Tentar recuperar kubeconfig para clusters kind (se existir)
+    if command -v kind &> /dev/null; then
+        KIND_CLUSTERS=$(kind get clusters 2>/dev/null || true)
+        if [ -n "$KIND_CLUSTERS" ]; then
+            cluster=$(echo "$KIND_CLUSTERS" | head -n1)
+            mkdir -p "$HOME/.kube"
+            if [ -f "$HOME/.kube/config" ]; then
+                cp "$HOME/.kube/config" "$HOME/.kube/config.backup.$(date +%s)" 2>/dev/null || true
+            fi
+            if kind get kubeconfig --name="$cluster" > "$HOME/.kube/config" 2>/dev/null; then
+                chmod 600 "$HOME/.kube/config" 2>/dev/null || true
+                export KUBECONFIG="$HOME/.kube/config"
+                if kubectl get nodes --request-timeout='5s' &> /dev/null; then
+                    log "✅ kubectl auto-recuperado com sucesso (kind)"
+                    return 0
+                fi
+            fi
         fi
     fi
 
@@ -280,11 +267,13 @@ setup_local_environment() {
     
     info "Executando configuração local..."
     bash src/scripts/local_setup.sh
-    
-    # Configurar docker-env após setup
-    if command -v minikube &> /dev/null && minikube status -p local-k8s &> /dev/null; then
-        info "Configurando Docker para usar daemon do minikube..."
-        eval $(minikube docker-env -p local-k8s)
+
+    # kind não necessita de docker-env; apenas garantir contexto
+    if command -v kind &> /dev/null; then
+        info "Verificando cluster kind..."
+        if kind get clusters | grep -q "local-k8s"; then
+            kubectl config use-context "kind-local-k8s" || true
+        fi
     fi
     
     log "Ambiente local configurado"
@@ -410,10 +399,10 @@ clean_local() {
     fi
     
     kubectl delete -f $kubernetes_dir/ --ignore-not-found=true 2>/dev/null || true
-    
-    info "Removendo cluster minikube..."
-    if minikube profile list -o json 2>/dev/null | grep -q "local-k8s"; then
-        minikube delete --profile local-k8s
+
+    info "Removendo cluster kind..."
+    if command -v kind &> /dev/null && kind get clusters | grep -q "local-k8s"; then
+        kind delete cluster --name local-k8s
     fi
     
     log "Recursos locais limpos"
@@ -539,8 +528,8 @@ fix_kubectl() {
         echo "❌ Não foi possível corrigir automaticamente"
         echo ""
         echo "Comandos manuais para tentar:"
-        echo "1. minikube profile list"
-        echo "2. minikube kubectl -- config view --raw > ~/.kube/config"
+    echo "1. kind get clusters"
+    echo "2. kind get kubeconfig --name=<cluster> > ~/.kube/config"
         echo "3. export KUBECONFIG=~/.kube/config"
         echo "4. kubectl get nodes"
     fi

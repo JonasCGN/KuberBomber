@@ -10,12 +10,12 @@ set -e
 AWS_ENABLED=${AWS_ENABLED:-false}
 LOCAL_MODE=${LOCAL_MODE:-true}
 CLUSTER_NAME="local-k8s"
-USE_MINIKUBE=${USE_MINIKUBE:-true}
+USE_KIND=${USE_KIND:-true}
 
 echo "=== Configuração de Ambiente Kubernetes Local ==="
 echo "AWS_ENABLED: $AWS_ENABLED"
 echo "LOCAL_MODE: $LOCAL_MODE"
-echo "CLUSTER_ENGINE: minikube"
+echo "CLUSTER_ENGINE: kind"
 echo ""
 
 # Cores para output
@@ -53,9 +53,9 @@ check_prerequisites() {
         warn "Continuando mesmo assim..."
     fi
     
-    # Verificar se minikube está instalado
-    if ! command -v minikube &> /dev/null; then
-        warn "minikube não encontrado. Será instalado automaticamente..."
+    # Verificar se kind está instalado
+    if ! command -v kind &> /dev/null; then
+        warn "kind não encontrado. Será instalado automaticamente..."
     fi
     
     # Verificar se kubectl está instalado
@@ -93,32 +93,32 @@ install_docker() {
     warn ""
     warn "Ou via snap: sudo snap install docker"
     warn ""
-    warn "Continuando sem Docker (minikube pode não funcionar)..."
+    warn "Continuando sem Docker (kind pode não funcionar)..."
 }
 
-install_minikube() {
-    if command -v minikube &> /dev/null; then
-        log "minikube já está instalado"
+install_kind() {
+    if command -v kind &> /dev/null; then
+        log "kind já está instalado"
         return 0
     fi
-    
-    log "Instalando minikube automaticamente..."
-    
+
+    log "Instalando kind automaticamente..."
+
     # Criar diretório local bin se não existir
     mkdir -p ~/.local/bin
-    
-    # Download e instalação do minikube
-    curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-    chmod +x minikube-linux-amd64
-    mv minikube-linux-amd64 ~/.local/bin/minikube
-    
+
+    # Download e instalação do kind
+    KIND_BIN="$HOME/.local/bin/kind"
+    curl -Lo "$KIND_BIN" https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+    chmod +x "$KIND_BIN"
+
     # Adicionar ao PATH se não estiver
     if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         export PATH="$HOME/.local/bin:$PATH"
     fi
-    
-    log "minikube instalado com sucesso em ~/.local/bin/"
+
+    log "kind instalado com sucesso em ~/.local/bin/"
 }
 
 install_kubectl() {
@@ -165,47 +165,31 @@ install_helm() {
     log "Helm instalado com sucesso"
 }
 
-create_minikube_cluster() {
+create_kind_cluster() {
     # Verificar se cluster já existe
-    if minikube status -p $CLUSTER_NAME &> /dev/null; then
-        log "Cluster minikube ${CLUSTER_NAME} já existe"
+    if command -v kind &> /dev/null && kind get clusters | grep -q "^${CLUSTER_NAME}$"; then
+        log "Cluster kind ${CLUSTER_NAME} já existe"
         return 0
     fi
-    
-    log "Criando cluster Kubernetes local com minikube (configuração otimizada)..."
-    
-    # Criar cluster minikube MUITO mais rápido e leve
-    minikube start \
-        --profile=$CLUSTER_NAME \
-        --driver=docker \
-        --disk-size=10g \
-        --container-runtime=docker \
-        --delete-on-failure=false
-    
-    # Configurar kubectl para usar o cluster
-    kubectl config use-context $CLUSTER_NAME
-    
-    # Configurar Docker para usar o daemon do minikube (muito importante!)
-    log "Configurando Docker para usar daemon do minikube..."
-    eval $(minikube docker-env -p $CLUSTER_NAME)
-    
-    # Adicionar configuração permanente no ~/.bashrc
-    if ! grep -q "minikube docker-env" ~/.bashrc; then
-        echo "" >> ~/.bashrc
-        echo "# Configuração automática do minikube docker-env" >> ~/.bashrc
-        echo "if minikube status -p local-k8s &> /dev/null; then" >> ~/.bashrc
-        echo "    eval \$(minikube docker-env -p local-k8s)" >> ~/.bashrc
-        echo "fi" >> ~/.bashrc
-        log "Configuração automática adicionada ao ~/.bashrc"
-    fi
-    
-    # Habilitar apenas addons essenciais (mais rápido)
-    log "Habilitando addons essenciais..."
-    minikube addons enable ingress -p $CLUSTER_NAME &
-    minikube addons enable metrics-server -p $CLUSTER_NAME &
-    wait  # Aguardar addons em paralelo
-    
-    log "Cluster criado com sucesso (otimizado para velocidade)"
+
+    log "Criando cluster Kubernetes local com kind (configuração otimizada)..."
+
+    # Criar cluster simples com kind
+    cat <<EOF > /tmp/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+EOF
+
+    kind create cluster --name "$CLUSTER_NAME" --config /tmp/kind-config.yaml
+
+    # Configurar kubectl para usar o cluster criado pelo kind
+    kubectl config use-context "kind-$CLUSTER_NAME" || true
+
+    # Habilitar alguns recursos necessários via kubectl (MetalLB/metrics/ingress serão instalados separadamente)
+    log "Cluster kind criado com sucesso"
 }
 
 install_metallb() {
@@ -337,10 +321,10 @@ main() {
     
     check_prerequisites
     install_docker
-    install_minikube
+    install_kind
     install_kubectl
     install_helm
-    create_minikube_cluster
+    create_kind_cluster
     install_metallb
     install_nginx_ingress
     install_monitoring_stack

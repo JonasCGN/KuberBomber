@@ -57,16 +57,15 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Usar contexto do cluster local
-    kubectl config use-context $CLUSTER_NAME
-    
-    # Configurar Docker para usar daemon do minikube
-    if command -v minikube &> /dev/null && minikube status -p $CLUSTER_NAME &> /dev/null; then
-        eval $(minikube docker-env -p $CLUSTER_NAME)
-        log "Docker configurado para usar daemon do minikube"
+    # Usar contexto do cluster local (kind uses context kind-<name>)
+    # Tentamos usar o contexto criado pelo kind, se existir
+    if kubectl config get-contexts --no-headers | grep -q "kind-$CLUSTER_NAME"; then
+        kubectl config use-context "kind-$CLUSTER_NAME" || true
+    else
+        kubectl config use-context $CLUSTER_NAME 2>/dev/null || true
     fi
-    
-    log "Pré-requisitos OK - usando cluster minikube $CLUSTER_NAME"
+
+    log "Pré-requisitos OK - usando cluster local $CLUSTER_NAME"
 }
 
 wait_for_pods() {
