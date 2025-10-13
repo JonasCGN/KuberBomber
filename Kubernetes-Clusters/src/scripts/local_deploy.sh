@@ -10,6 +10,7 @@ set -e
 AWS_ENABLED=${AWS_ENABLED:-false}
 CLUSTER_NAME="local-k8s"
 NAMESPACE="default"
+KUBERNETES_DIR=${KUBERNETES_DIR:-"src/scripts/kubernetes"}
 
 # Cores para output
 RED='\033[0;31m'
@@ -50,16 +51,16 @@ check_prerequisites() {
     fi
     
     # Verificar se cluster local existe e está ativo
-    if ! kubectl cluster-info --context kind-$CLUSTER_NAME &> /dev/null; then
+    if ! kubectl cluster-info --context $CLUSTER_NAME &> /dev/null; then
         error "Cluster local não encontrado ou não está ativo."
         error "Execute primeiro: bash src/scripts/local_setup.sh"
         exit 1
     fi
     
     # Usar contexto do cluster local
-    kubectl config use-context kind-$CLUSTER_NAME
+    kubectl config use-context $CLUSTER_NAME
     
-    log "Pré-requisitos OK - usando cluster kind-$CLUSTER_NAME"
+    log "Pré-requisitos OK - usando cluster minikube $CLUSTER_NAME"
 }
 
 wait_for_pods() {
@@ -80,24 +81,25 @@ wait_for_pods() {
 
 deploy_applications() {
     info "=== Fazendo deploy das aplicações ==="
+    info "Usando configurações do diretório: $KUBERNETES_DIR"
     
     # Aplicar deployments
     info "Aplicando deployments..."
-    kubectl apply -f src/scripts/kubernetes/local_deployment.yaml
+    kubectl apply -f $KUBERNETES_DIR/local_deployment.yaml
     
     # Aplicar services e ingress
     info "Aplicando services e ingress..."
-    kubectl apply -f src/scripts/kubernetes/local_services.yaml
+    kubectl apply -f $KUBERNETES_DIR/local_services.yaml
     
     # Aguardar todos os deployments estarem prontos
     info "Aguardando deployments estarem prontos..."
-    kubectl rollout status deployment/foo-app --timeout=30s
-    kubectl rollout status deployment/bar-app --timeout=30s
-    kubectl rollout status deployment/test-app --timeout=30s
+    kubectl rollout status deployment/foo-app --timeout=450s
+    kubectl rollout status deployment/bar-app --timeout=450s
+    kubectl rollout status deployment/test-app --timeout=450s
     
     # Aplicar metrics-server se não estiver funcionando
     info "Aplicando metrics-server corrigido..."
-    kubectl apply -f src/scripts/kubernetes/metrics-server.yaml
+    kubectl apply -f $KUBERNETES_DIR/metrics-server.yaml
 
     # Aguardar pods estarem prontos
     wait_for_pods "foo"

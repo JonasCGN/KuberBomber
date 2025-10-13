@@ -16,7 +16,35 @@ spec:
     spec:
       containers:
         - name: foo-app
-          image: iuresf/apprunner
+          image: python:3.9-alpine
+          command: ["/bin/sh", "-c"]
+          args: 
+            - |
+              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              apk add --no-cache procps util-linux busybox-extras curl
+              pip install flask
+              cat > /app.py << 'EOF'
+              from flask import Flask, jsonify
+              import os, time, random
+              app = Flask(__name__)
+              @app.route(os.environ.get('ROUTE_PATH', '/foo'))
+              def hello():
+                  load = float(os.environ.get('LOAD', '0.5'))
+                  mean = float(os.environ.get('MEAN', '0.01'))
+                  delay = random.expovariate(1/mean) * load
+                  time.sleep(min(delay, 1.0))
+                  return jsonify({
+                      'app': 'foo-ubuntu-tools',
+                      'load': load,
+                      'delay': delay,
+                      'os': 'alpine-with-linux-tools',
+                      'version': 'ubuntu-tools-edition',
+                      'tools': 'ps,kill,reboot,systemctl available'
+                  })
+              if __name__ == '__main__':
+                  app.run(host='0.0.0.0', port=9898, debug=False)
+              EOF
+              python /app.py
           env:
             - name: LOAD
               value: "0.5"
@@ -38,7 +66,7 @@ spec:
             httpGet:
               path: /foo
               port: 9898
-            initialDelaySeconds: 60
+            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5
@@ -46,7 +74,7 @@ spec:
             httpGet:
               path: /foo
               port: 9898
-            initialDelaySeconds: 30
+            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 3
@@ -69,7 +97,36 @@ spec:
     spec:
       containers:
         - name: bar-app
-          image: iuresf/apprunner
+          image: python:3.9-alpine
+          command: ["/bin/sh", "-c"]
+          args: 
+            - |
+              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              apk add --no-cache procps util-linux busybox-extras curl
+              pip install flask
+              cat > /app.py << 'EOF'
+              from flask import Flask, jsonify
+              import os, time, random
+              app = Flask(__name__)
+              @app.route(os.environ.get('ROUTE_PATH', '/bar'))
+              def hello():
+                  load = float(os.environ.get('LOAD', '0.5'))
+                  mean = float(os.environ.get('MEAN', '0.01'))
+                  delay = random.expovariate(1/mean) * load
+                  time.sleep(min(delay, 1.0))
+                  return jsonify({
+                      'app': 'bar-ubuntu-tools',
+                      'load': load,
+                      'delay': delay,
+                      'os': 'alpine-with-linux-tools',
+                      'version': 'ubuntu-tools-edition',
+                      'tools': 'ps,kill,reboot,systemctl available'
+                  })
+              if __name__ == '__main__':
+                  app.run(host='0.0.0.0', port=9898, debug=False)
+              EOF
+              python /app.py
+              python3 /app.py
           env:
             - name: LOAD
               value: "0.5"
@@ -91,7 +148,7 @@ spec:
             httpGet:
               path: /bar
               port: 9898
-            initialDelaySeconds: 60
+            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5
@@ -99,7 +156,7 @@ spec:
             httpGet:
               path: /bar
               port: 9898
-            initialDelaySeconds: 30
+            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 3
@@ -122,7 +179,43 @@ spec:
     spec:
       containers:
         - name: test-app
-          image: iuresf/apprunner
+          image: python:3.9-alpine
+          command: ["/bin/sh", "-c"]
+          args: 
+            - |
+              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              apk add --no-cache procps util-linux busybox-extras curl
+              pip install flask
+              cat > /app.py << 'EOF'
+              from flask import Flask, jsonify
+              import os, time, random
+              app = Flask(__name__)
+              @app.route(os.environ.get('ROUTE_PATH', '/test'))
+              def hello():
+                  load = float(os.environ.get('LOAD', '0.3'))
+                  mean = float(os.environ.get('MEAN', '0.01'))
+                  delay = random.expovariate(1/mean) * load
+                  time.sleep(min(delay, 1.0))
+                  return jsonify({
+                      'app': 'test-ubuntu-tools',
+                      'load': load,
+                      'delay': delay,
+                      'os': 'alpine-with-linux-tools',
+                      'version': 'ubuntu-tools-edition',
+                      'tools': 'ps,kill,reboot,systemctl available'
+                  })
+              if __name__ == '__main__':
+                  app.run(host='0.0.0.0', port=9898, debug=False)
+              EOF
+              python /app.py
+                      'delay': delay,
+                      'os': 'ubuntu:20.04',
+                      'version': 'ubuntu-edition'
+                  })
+              if __name__ == '__main__':
+                  app.run(host='0.0.0.0', port=9898, debug=False)
+              EOF
+              python3 /app.py
           env:
             - name: LOAD
               value: "0.3"
@@ -144,7 +237,7 @@ spec:
             httpGet:
               path: /test
               port: 9898
-            initialDelaySeconds: 60
+            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5
@@ -152,7 +245,7 @@ spec:
             httpGet:
               path: /test
               port: 9898
-            initialDelaySeconds: 30
+            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 3

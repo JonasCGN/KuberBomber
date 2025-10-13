@@ -9,6 +9,7 @@ set -e
 # Configurações padrão
 AWS_ENABLED=${AWS_ENABLED:-false}
 ENVIRONMENT=${ENVIRONMENT:-local}
+USE_UBUNTU=${USE_UBUNTU:-false}
 
 # Cores para output
 RED='\033[0;31m'
@@ -45,7 +46,8 @@ show_help() {
     echo ""
     echo "OPTIONS:"
     echo "  --aws              Habilita modo AWS (cria recursos na nuvem)"
-    echo "  --local            Força modo local (usa kind/Docker)"
+    echo "  --local            Força modo local (usa minikube/Docker)"
+    echo "  --ubuntu           Usa deployments da versão Ubuntu (kubernetes_ubuntu/)"
     echo "  --setup            Apenas configura ambiente (não faz deploy)"
     echo "  --deploy           Apenas faz deploy (assume ambiente já configurado)"
     echo "  --test             Executa testes após deploy"
@@ -55,16 +57,19 @@ show_help() {
     echo "Variáveis de ambiente:"
     echo "  AWS_ENABLED=true|false    - Controla se usa AWS ou local"
     echo "  ENVIRONMENT=local|aws     - Define o ambiente de deploy"
+    echo "  USE_UBUNTU=true|false     - Controla se usa deployments Ubuntu"
     echo ""
     echo "Exemplos:"
     echo "  $0                        # Deploy local (padrão)"
     echo "  $0 --aws                  # Deploy na AWS"
     echo "  $0 --local --setup        # Apenas configura ambiente local"
     echo "  $0 --aws --deploy         # Apenas deploy AWS (CDK já configurado)"
+    echo "  $0 --ubuntu               # Deploy local com versão Ubuntu"
+    echo "  $0 --local --ubuntu --test # Deploy local Ubuntu com testes"
     echo "  AWS_ENABLED=true $0       # Deploy AWS via variável de ambiente"
     echo ""
     echo "Pré-requisitos:"
-    echo "  Local: Docker, kind, kubectl, helm"
+    echo "  Local: Docker, minikube, kubectl, helm"
     echo "  AWS: AWS CLI configurado, CDK, Maven, Java"
 }
 
@@ -84,6 +89,10 @@ parse_args() {
             --local)
                 export AWS_ENABLED=false
                 export ENVIRONMENT=local
+                shift
+                ;;
+            --ubuntu)
+                export USE_UBUNTU=true
                 shift
                 ;;
             --setup)
@@ -138,13 +147,13 @@ check_prerequisites_aws() {
     
     # Verificar Maven
     if ! command -v mvn &> /dev/null; then
-        error "Maven não encontrado. Instale: sudo apt install maven"
+        error "Maven não encontrado. Instale: apt install maven (como root)"
         exit 1
     fi
     
     # Verificar Java
     if ! command -v java &> /dev/null; then
-        error "Java não encontrado. Instale: sudo apt install openjdk-11-jdk"
+        error "Java não encontrado. Instale: apt install openjdk-11-jdk (como root)"
         exit 1
     fi
     
@@ -172,38 +181,29 @@ ensure_kubectl_working() {
         fi
     fi
 
-    warn "Tentando recuperar kubeconfig via kind..."
+    warn "Tentando recuperar kubeconfig via minikube..."
 
-    # Garantir que Docker funciona (necessário para kind)
+    # Garantir que Docker funciona (necessário para minikube)
     if ! docker ps &> /dev/null; then
-        info "Configurando Docker..."
-        sudo systemctl start docker || true
-
-        # Adicionar usuário ao grupo docker se não estiver
-        if ! groups "$USER" | grep -q docker; then
-            sudo usermod -aG docker "$USER" || true
-        fi
-
-        # Ajustar permissões do socket (se possível)
-        sudo chown root:docker /var/run/docker.sock 2>/dev/null || true
-        sudo chmod 660 /var/run/docker.sock 2>/dev/null || true
-
-        # Tentar aplicar novo grupo na sessão atual (não falhar se não funcionar)
-        newgrp docker <<'EOF' 2>/dev/null || true
-exit
-EOF
+        warn "Docker não está acessível. Possíveis soluções:"
+        warn "1. Iniciar Docker: systemctl start docker (como root)"
+        warn "2. Adicionar usuário ao grupo: usermod -aG docker $USER (como root)"
+        warn "3. Fazer logout/login para aplicar grupo docker"
+        warn "4. Ou executar: newgrp docker"
+        warn ""
+        warn "Tentando continuar mesmo assim..."
     fi
 
-    # Verificar se kind está instalado
-    if ! command -v kind &> /dev/null; then
-        error "kind não está instalado"
+    # Verificar se minikube está instalado
+    if ! command -v minikube &> /dev/null; then
+        error "minikube não está instalado"
         return 1
     fi
 
-    # Obter clusters disponíveis via kind
-    clusters=$(kind get clusters 2>/dev/null || echo "")
+    # Obter clusters disponíveis via minikube
+    clusters=$(minikube profile list -o json 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4 || echo "")
     if [ -z "$clusters" ]; then
-        warn "Nenhum cluster kind encontrado"
+        warn "Nenhum cluster minikube encontrado"
         return 1
     fi
 
@@ -216,13 +216,13 @@ EOF
         cp "$HOME/.kube/config" "$HOME/.kube/config.backup.$(date +%s)" 2>/dev/null || true
     fi
 
-    # recuperar kubeconfig do kind
-    if kind get kubeconfig --name "$cluster" > "$HOME/.kube/config" 2>/dev/null; then
+    # recuperar kubeconfig do minikube
+    if minikube kubectl --profile="$cluster" -- config view --raw > "$HOME/.kube/config" 2>/dev/null; then
         chmod 600 "$HOME/.kube/config" 2>/dev/null || true
         export KUBECONFIG="$HOME/.kube/config"
 
         if kubectl get nodes --request-timeout='5s' &> /dev/null; then
-            log "✅ kubectl auto-recuperado com sucesso (kind)"
+            log "✅ kubectl auto-recuperado com sucesso (minikube)"
             return 0
         fi
     fi
@@ -239,8 +239,8 @@ check_prerequisites_local() {
         warn "Docker não encontrado. Será instalado automaticamente."
     elif ! docker ps &> /dev/null; then
         warn "Docker não está rodando ou usuário não tem permissões."
-        warn "Execute: sudo systemctl start docker"
-        warn "E adicione seu usuário ao grupo docker: sudo usermod -aG docker $USER"
+        warn "Execute manualmente: systemctl start docker (como root)"
+        warn "E adicione seu usuário ao grupo docker: usermod -aG docker $USER (como root)"
     fi
     
     # SEMPRE garantir que kubectl funcione - NUNCA MAIS ERRO!
@@ -313,7 +313,15 @@ deploy_local() {
         exit 1
     fi
     
-    info "Executando deploy local..."
+    # Definir qual pasta de kubernetes usar
+    if [ "$USE_UBUNTU" = "true" ]; then
+        info "Executando deploy local com configurações Ubuntu..."
+        export KUBERNETES_DIR="src/scripts/kubernetes_ubuntu"
+    else
+        info "Executando deploy local com configurações padrão..."
+        export KUBERNETES_DIR="src/scripts/kubernetes"
+    fi
+    
     bash src/scripts/local_deploy.sh
     
     log "Deploy local concluído"
@@ -386,12 +394,20 @@ clean_local() {
     # Garantir kubectl funciona antes de limpar
     ensure_kubectl_working || true
     
-    info "Removendo deployments Kubernetes..."
-    kubectl delete -f src/scripts/kubernetes/ --ignore-not-found=true 2>/dev/null || true
+    # Definir qual pasta usar para limpeza
+    local kubernetes_dir="src/scripts/kubernetes"
+    if [ "$USE_UBUNTU" = "true" ]; then
+        kubernetes_dir="src/scripts/kubernetes_ubuntu"
+        info "Removendo deployments Kubernetes Ubuntu..."
+    else
+        info "Removendo deployments Kubernetes padrão..."
+    fi
     
-    info "Removendo cluster kind..."
-    if kind get clusters 2>/dev/null | grep -q "^local-k8s$"; then
-        kind delete cluster --name local-k8s
+    kubectl delete -f $kubernetes_dir/ --ignore-not-found=true 2>/dev/null || true
+    
+    info "Removendo cluster minikube..."
+    if minikube profile list -o json 2>/dev/null | grep -q "local-k8s"; then
+        minikube delete --profile local-k8s
     fi
     
     log "Recursos locais limpos"
@@ -403,6 +419,7 @@ show_status() {
     echo "Configuração atual:"
     echo "  AWS_ENABLED: $AWS_ENABLED"
     echo "  ENVIRONMENT: $ENVIRONMENT"
+    echo "  USE_UBUNTU: $USE_UBUNTU"
     echo ""
     
     if [ "$AWS_ENABLED" = "true" ]; then
@@ -412,7 +429,11 @@ show_status() {
             echo "Region: $(aws configure get region 2>/dev/null || echo 'N/A')"
         fi
     else
-        echo "Modo LOCAL ativo"
+        if [ "$USE_UBUNTU" = "true" ]; then
+            echo "Modo LOCAL ativo (versão Ubuntu)"
+        else
+            echo "Modo LOCAL ativo (versão padrão)"
+        fi
         if command -v kubectl &> /dev/null; then
             echo "Contexto atual: $(kubectl config current-context 2>/dev/null || echo 'N/A')"
             if kubectl get nodes &> /dev/null; then
@@ -479,11 +500,21 @@ main() {
         log "🔍 Verifique o console AWS para URLs e IPs"
         log "💰 Lembre-se de destruir recursos quando não precisar: $0 --aws --clean"
     else
-        log "🏠 Aplicações rodando localmente"
-        log "🌐 Acesse: http://localhost:30080/foo, /bar, /test"
+        if [ "$USE_UBUNTU" = "true" ]; then
+            log "🏠 Aplicações Ubuntu rodando localmente"
+            log "🐧 Versão: Deployments Ubuntu (kubernetes_ubuntu/)"
+        else
+            log "� Aplicações rodando localmente"
+            log "📦 Versão: Deployments padrão (kubernetes/)"
+        fi
+        log "�🌐 Acesse: http://localhost:30080/foo, /bar, /test"
         log "📊 Monitoramento: http://localhost:30081 (Grafana), http://localhost:30082 (Prometheus)"
         log "🧪 Teste HPA: bash /tmp/load_test.sh"
-        log "🗑️  Para limpar: $0 --local --clean"
+        if [ "$USE_UBUNTU" = "true" ]; then
+            log "🗑️  Para limpar: $0 --local --ubuntu --clean"
+        else
+            log "🗑️  Para limpar: $0 --local --clean"
+        fi
         echo ""
         log "💡 DICA: Se kubectl der erro, execute: $0 --fix-kubectl"
     fi
@@ -502,8 +533,8 @@ fix_kubectl() {
         echo "❌ Não foi possível corrigir automaticamente"
         echo ""
         echo "Comandos manuais para tentar:"
-        echo "1. kind get clusters"
-        echo "2. kind get kubeconfig --name local-k8s > ~/.kube/config"
+        echo "1. minikube profile list"
+        echo "2. minikube kubectl -- config view --raw > ~/.kube/config"
         echo "3. export KUBECONFIG=~/.kube/config"
         echo "4. kubectl get nodes"
     fi

@@ -10,10 +10,12 @@ set -e
 AWS_ENABLED=${AWS_ENABLED:-false}
 LOCAL_MODE=${LOCAL_MODE:-true}
 CLUSTER_NAME="local-k8s"
+USE_MINIKUBE=${USE_MINIKUBE:-true}
 
 echo "=== Configuração de Ambiente Kubernetes Local ==="
 echo "AWS_ENABLED: $AWS_ENABLED"
 echo "LOCAL_MODE: $LOCAL_MODE"
+echo "CLUSTER_ENGINE: minikube"
 echo ""
 
 # Cores para output
@@ -42,69 +44,81 @@ check_prerequisites() {
         warn "Este script foi testado no Ubuntu. Outros sistemas podem ter problemas."
     fi
     
-    # Verificar se tem privilégios sudo
-    if ! sudo -n true 2>/dev/null; then
-        error "Este script precisa de privilégios sudo. Execute: sudo -v"
-        exit 1
+    # Verificar se Docker está funcionando (sem sudo)
+    if ! docker ps &> /dev/null; then
+        warn "Docker não está acessível. Certifique-se de que:"
+        warn "1. Docker está rodando: systemctl status docker"
+        warn "2. Seu usuário está no grupo docker: groups \$USER"
+        warn "3. Você fez logout/login após adicionar ao grupo"
+        warn "Continuando mesmo assim..."
     fi
     
-    log "Pré-requisitos OK"
+    # Verificar se minikube está instalado
+    if ! command -v minikube &> /dev/null; then
+        warn "minikube não encontrado. Será instalado automaticamente..."
+    fi
+    
+    # Verificar se kubectl está instalado
+    if ! command -v kubectl &> /dev/null; then
+        warn "kubectl não encontrado. Instale com:"
+        warn "curl -LO https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        warn "chmod +x kubectl && mv kubectl /usr/local/bin/"
+        warn "Continuando mesmo assim..."
+    fi
+    
+    log "Pré-requisitos verificados (modo sem sudo)"
 }
 
 install_docker() {
+    log "Verificando Docker..."
+    
     if command -v docker &> /dev/null; then
         log "Docker já está instalado"
+        if docker ps &> /dev/null; then
+            log "Docker está funcionando"
+        else
+            warn "Docker instalado mas não acessível. Execute:"
+            warn "  newgrp docker"
+            warn "Ou reinicie sua sessão após executar:"
+            warn "  sudo usermod -aG docker $USER"
+        fi
         return 0
     fi
     
-    log "Instalando Docker..."
-    
-    # Atualizar repositórios
-    sudo apt-get update -y
-    
-    # Instalar dependências
-    sudo apt-get install -y \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release
-    
-    # Adicionar chave GPG do Docker
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    
-    # Adicionar repositório do Docker
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
-    # Instalar Docker
-    sudo apt-get update -y
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    
-    # Adicionar usuário ao grupo docker
-    sudo usermod -aG docker $USER
-    
-    # Iniciar e habilitar Docker
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    
-    log "Docker instalado com sucesso"
-    warn "IMPORTANTE: Faça logout e login novamente para usar Docker sem sudo"
+    warn "Docker não encontrado! Instale com:"
+    warn "  curl -fsSL https://get.docker.com -o get-docker.sh"
+    warn "  sh get-docker.sh"
+    warn "  sudo usermod -aG docker $USER"
+    warn "  newgrp docker"
+    warn ""
+    warn "Ou via snap: sudo snap install docker"
+    warn ""
+    warn "Continuando sem Docker (minikube pode não funcionar)..."
 }
 
-install_kind() {
-    if command -v kind &> /dev/null; then
-        log "kind já está instalado"
+install_minikube() {
+    if command -v minikube &> /dev/null; then
+        log "minikube já está instalado"
         return 0
     fi
     
-    log "Instalando kind (Kubernetes in Docker)..."
+    log "Instalando minikube automaticamente..."
     
-    # Download kind
-    curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-    chmod +x ./kind
-    sudo mv ./kind /usr/local/bin/kind
+    # Criar diretório local bin se não existir
+    mkdir -p ~/.local/bin
     
-    log "kind instalado com sucesso"
+    # Download e instalação do minikube
+    curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+    chmod +x minikube-linux-amd64
+    mv minikube-linux-amd64 ~/.local/bin/minikube
+    
+    # Adicionar ao PATH se não estiver
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+    
+    log "minikube instalado com sucesso em ~/.local/bin/"
 }
 
 install_kubectl() {
@@ -113,19 +127,29 @@ install_kubectl() {
         return 0
     fi
     
-    log "Instalando kubectl..."
+    log "Instalando kubectl automaticamente..."
     
-    # Download kubectl
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    # Criar diretório local bin se não existir
+    mkdir -p ~/.local/bin
+    
+    # Download da versão estável do kubectl
+    KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+    
+    # Instalar kubectl
     chmod +x kubectl
-    sudo mv kubectl /usr/local/bin/
+    mv kubectl ~/.local/bin/
     
-    # Configurar autocompletar
+    # Adicionar ao PATH se não estiver
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+    
+    # Configurar bash completion
     echo 'source <(kubectl completion bash)' >> ~/.bashrc
-    echo 'alias k=kubectl' >> ~/.bashrc
-    echo 'complete -o default -F __start_kubectl k' >> ~/.bashrc
     
-    log "kubectl instalado com sucesso"
+    log "kubectl instalado com sucesso em ~/.local/bin/"
 }
 
 install_helm() {
@@ -141,53 +165,34 @@ install_helm() {
     log "Helm instalado com sucesso"
 }
 
-create_kind_cluster() {
+create_minikube_cluster() {
     # Verificar se cluster já existe
-    if kind get clusters | grep -q "^${CLUSTER_NAME}$"; then
-        log "Cluster ${CLUSTER_NAME} já existe"
+    if minikube status -p $CLUSTER_NAME &> /dev/null; then
+        log "Cluster minikube ${CLUSTER_NAME} já existe"
         return 0
     fi
     
-    log "Criando cluster Kubernetes local com kind..."
+    log "Criando cluster Kubernetes local com minikube..."
     
-    # Criar arquivo de configuração do cluster
-    cat <<EOF > /tmp/kind-config.yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  kubeadmConfigPatches:
-  - |
-    kind: InitConfiguration
-    nodeRegistration:
-      kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 30080
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 30443
-    protocol: TCP
-  - containerPort: 9090
-    hostPort: 30082
-    protocol: TCP
-  - containerPort: 3000
-    hostPort: 30081
-    protocol: TCP
-- role: worker
-  labels:
-    node-type: worker
-- role: worker
-  labels:
-    node-type: worker
-EOF
-
-    # Criar cluster
-    kind create cluster --config=/tmp/kind-config.yaml --name $CLUSTER_NAME
+    # Criar cluster minikube com configurações específicas
+    minikube start \
+        --profile=$CLUSTER_NAME \
+        --nodes=3 \
+        --driver=docker \
+        --kubernetes-version=v1.28.0 \
+        --memory=4096 \
+        --cpus=2 \
+        --extra-config=kubelet.housekeeping-interval=10s \
+        --extra-config=kubelet.cgroups-per-qos=true \
+        --extra-config=kubelet.cgroup-driver=systemd
     
     # Configurar kubectl para usar o cluster
-    kubectl cluster-info --context kind-$CLUSTER_NAME
+    kubectl config use-context $CLUSTER_NAME
+    
+    # Habilitar addons úteis
+    minikube addons enable ingress -p $CLUSTER_NAME
+    minikube addons enable metrics-server -p $CLUSTER_NAME
+    minikube addons enable dashboard -p $CLUSTER_NAME
     
     log "Cluster criado com sucesso"
 }
@@ -321,10 +326,10 @@ main() {
     
     check_prerequisites
     install_docker
-    install_kind
+    install_minikube
     install_kubectl
     install_helm
-    create_kind_cluster
+    create_minikube_cluster
     install_metallb
     install_nginx_ingress
     install_monitoring_stack
