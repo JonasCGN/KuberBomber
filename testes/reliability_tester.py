@@ -128,11 +128,31 @@ class ReliabilityTester:
             ], capture_output=True, text=True, check=True)
             
             pods = result.stdout.strip().split()
+            print(f"📋 Pods encontrados: {[pod for pod in pods if pod]}")
             return [pod for pod in pods if pod]
             
         except subprocess.CalledProcessError as e:
             print(f"❌ Erro ao obter pods: {e}")
             return []
+    
+    def show_pod_status(self, highlight_pod: str = None):
+        """Mostra status dos pods com kubectl get pods"""
+        try:
+            result = subprocess.run([
+                'kubectl', 'get', 'pods', '--context=local-k8s', '-o', 'wide'
+            ], capture_output=True, text=True, check=True)
+            
+            print("📋 === STATUS DOS PODS ===")
+            lines = result.stdout.strip().split('\n')
+            for line in lines:
+                if highlight_pod and highlight_pod in line:
+                    print(f"🎯 {line}")  # Destacar o pod alvo
+                else:
+                    print(f"   {line}")
+            print()
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erro ao obter status dos pods: {e}")
     
     def get_worker_nodes(self) -> List[str]:
         """Obtém lista de worker nodes"""
@@ -149,10 +169,13 @@ class ReliabilityTester:
             print(f"❌ Erro ao obter worker nodes: {e}")
             return []
     
-    def check_application_health(self, service: str) -> Dict:
+    def check_application_health(self, service: str, verbose: bool = True) -> Dict:
         """Verifica se uma aplicação está respondendo"""
         config = self.services[service]
         url = f"http://localhost:{config['port']}{config['endpoint']}"
+        
+        if verbose:
+            print(f"🔍 Testando {service} em {url}")
         
         try:
             start_time = time.time()
@@ -160,12 +183,16 @@ class ReliabilityTester:
             response_time = time.time() - start_time
             
             if response.status_code == 200:
+                if verbose:
+                    print(f"✅ {service}: OK (HTTP {response.status_code}, {response_time:.3f}s)")
                 return {
                     'status': 'healthy',
                     'response_time': response_time,
                     'status_code': response.status_code
                 }
             else:
+                if verbose:
+                    print(f"⚠️ {service}: HTTP {response.status_code} ({response_time:.3f}s)")
                 return {
                     'status': 'unhealthy',
                     'response_time': response_time,
@@ -173,11 +200,68 @@ class ReliabilityTester:
                     'error': f"HTTP {response.status_code}"
                 }
         except requests.exceptions.RequestException as e:
+            if verbose:
+                print(f"❌ {service}: {str(e)}")
             return {
                 'status': 'unreachable',
                 'response_time': None,
                 'error': str(e)
             }
+    
+    def check_all_applications(self, verbose: bool = True) -> Dict:
+        """Verifica saúde de todas as aplicações"""
+        results = {}
+        for service in self.services.keys():
+            results[service] = self.check_application_health(service, verbose)
+        return results
+    
+    def check_port_forwards(self):
+        """Verifica se os port-forwards estão ativos"""
+        print("🔍 === VERIFICANDO PORT-FORWARDS ===")
+        
+        import socket
+        for service, config in self.services.items():
+            port = config['port']
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('127.0.0.1', port))
+                sock.close()
+                
+                if result == 0:
+                    print(f"✅ Porta {port} ({service}): Ativa")
+                else:
+                    print(f"❌ Porta {port} ({service}): Não disponível")
+            except Exception as e:
+                print(f"❌ Porta {port} ({service}): Erro - {e}")
+        print()
+    
+    def initial_system_check(self):
+        """Verificação inicial completa do sistema"""
+        print("1️⃣ === VERIFICAÇÃO INICIAL DO SISTEMA ===")
+        
+        # Mostrar status dos pods
+        self.show_pod_status()
+        
+        # Verificar port-forwards
+        self.check_port_forwards()
+        
+        # Verificar saúde das aplicações
+        print("🔍 Verificando saúde das aplicações via HTTP...")
+        health_status = self.check_all_applications(verbose=True)
+        healthy_count = sum(1 for status in health_status.values() if status['status'] == 'healthy')
+        
+        print(f"\n📊 === RESULTADO DA VERIFICAÇÃO ===")
+        print(f"✅ Aplicações saudáveis: {healthy_count}/3")
+        
+        for service, status in health_status.items():
+            emoji = "✅" if status['status'] == 'healthy' else "❌"
+            print(f"   {emoji} {service}: {status['status']}")
+            if 'error' in status:
+                print(f"      🔍 Detalhes: {status['error']}")
+        
+        print("="*50)
+        return healthy_count, health_status
     
     def update_component_metrics(self, component_id: str, component_type: str, 
                                recovery_time: float, recovered: bool):
@@ -256,11 +340,6 @@ class ReliabilityTester:
                 print(f"   ❌ Nenhuma recuperação bem-sucedida para calcular MTTR")
         
         print("="*60)
-        """Verifica saúde de todas as aplicações"""
-        results = {}
-        for service in self.services.keys():
-            results[service] = self.check_application_health(service)
-        return results
     
     def wait_for_recovery(self, timeout: int = 300) -> Tuple[bool, float]:
         """Aguarda todas as aplicações ficarem saudáveis e retorna tempo de recuperação"""
@@ -268,15 +347,48 @@ class ReliabilityTester:
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            health_status = self.check_all_applications()
+            elapsed = time.time() - start_time
+            print(f"\n🔍 Verificação #{int(elapsed//2 + 1)} (tempo: {elapsed:.1f}s)")
+            
+            # Mostrar status dos pods a cada verificação
+            print("📋 kubectl get pods:")
+            try:
+                result = subprocess.run([
+                    'kubectl', 'get', 'pods', '--context=local-k8s'
+                ], capture_output=True, text=True, check=True)
+                
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    print(f"   {line}")
+            except subprocess.CalledProcessError as e:
+                print(f"❌ Erro ao executar kubectl get pods: {e}")
+            
+            print()  # Linha em branco
+            
+            # Verificar saúde das aplicações (modo silencioso)
+            health_status = self.check_all_applications(verbose=False)
             healthy_count = sum(1 for status in health_status.values() if status['status'] == 'healthy')
+            
+            print(f"🏥 Status das aplicações: {healthy_count}/3 saudáveis")
+            for service, status in health_status.items():
+                emoji = "✅" if status['status'] == 'healthy' else "❌"
+                if status['status'] == 'healthy':
+                    print(f"  {emoji} {service}: {status['status']} (tempo: {status['response_time']:.3f}s)")
+                else:
+                    print(f"  {emoji} {service}: {status['status']}")
+                    if 'error' in status:
+                        # Mostrar apenas parte do erro para não poluir
+                        error_msg = str(status['error'])
+                        if len(error_msg) > 80:
+                            error_msg = error_msg[:80] + "..."
+                        print(f"      🔍 Erro: {error_msg}")
             
             if healthy_count == len(self.services):
                 recovery_time = time.time() - start_time
-                print(f"✅ Todas as aplicações recuperadas em {recovery_time:.2f}s")
+                print(f"\n✅ Todas as aplicações recuperadas em {recovery_time:.2f}s")
                 return True, recovery_time
             
-            print(f"🔍 Verificação: {healthy_count}/{len(self.services)} saudáveis (tempo: {time.time() - start_time:.1f}s)")
+            print(f"⏸️ Aguardando 2s antes da próxima verificação...")
             time.sleep(2)
         
         print(f"❌ Timeout: Aplicações não se recuperaram em {timeout}s")
@@ -422,6 +534,29 @@ class ReliabilityTester:
         
         print(f"🎯 Alvo selecionado: {target}")
         
+        # Verificação inicial completa do sistema
+        healthy_count, initial_health = self.initial_system_check()
+        
+        if healthy_count == 0:
+            print("⚠️ NENHUMA APLICAÇÃO ESTÁ SAUDÁVEL!")
+            print("💡 Possíveis soluções:")
+            print("   1. Verifique se os pods estão rodando: kubectl get pods")
+            print("   2. Configure port-forwards:")
+            print("      kubectl port-forward svc/foo-service 8080:80 &")
+            print("      kubectl port-forward svc/bar-service 8081:80 &")
+            print("      kubectl port-forward svc/test-service 8082:80 &")
+            print("   3. Ou execute o script port-forward-monitor.sh")
+            print("\n🔧 Deseja continuar mesmo assim? (y/N):")
+            
+            try:
+                choice = input().strip().lower()
+                if choice not in ['y', 'yes', 's', 'sim']:
+                    print("❌ Teste cancelado pelo usuário")
+                    return []
+            except KeyboardInterrupt:
+                print("\n❌ Teste cancelado")
+                return []
+        
         # Executar teste iterativo
         results = []
         
@@ -429,7 +564,7 @@ class ReliabilityTester:
             print(f"\n🔄 === ITERAÇÃO {iteration}/{iterations} ===")
             
             # Verificar estado inicial
-            initial_health = self.check_all_applications()
+            initial_health = self.check_all_applications(verbose=True)
             healthy_before = sum(1 for status in initial_health.values() if status['status'] == 'healthy')
             
             if healthy_before == 0:
