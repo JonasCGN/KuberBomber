@@ -52,6 +52,8 @@ show_help() {
     echo "  --deploy           Apenas faz deploy (assume ambiente já configurado)"
     echo "  --test             Executa testes após deploy"
     echo "  --clean            Remove recursos existentes antes do deploy"
+    echo "  --port-forwards    Apenas configura port-forwards (8080, 8081, 8082)"
+    echo "  --stop-pf          Para todos os port-forwards"
     echo "  --help             Mostra esta ajuda"
     echo ""
     echo "Variáveis de ambiente:"
@@ -66,6 +68,8 @@ show_help() {
     echo "  $0 --aws --deploy         # Apenas deploy AWS (CDK já configurado)"
     echo "  $0 --ubuntu               # Deploy local com versão Ubuntu"
     echo "  $0 --local --ubuntu --test # Deploy local Ubuntu com testes"
+    echo "  $0 --port-forwards        # Apenas configura port-forwards"
+    echo "  $0 --stop-pf              # Para todos os port-forwards"
     echo "  AWS_ENABLED=true $0       # Deploy AWS via variável de ambiente"
     echo ""
     echo "Pré-requisitos:"
@@ -78,6 +82,8 @@ parse_args() {
     DEPLOY_ONLY=false
     RUN_TESTS=false
     CLEAN_FIRST=false
+    PORT_FORWARDS_ONLY=false
+    STOP_PORT_FORWARDS=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -109,6 +115,14 @@ parse_args() {
                 ;;
             --clean)
                 CLEAN_FIRST=true
+                shift
+                ;;
+            --port-forwards)
+                PORT_FORWARDS_ONLY=true
+                shift
+                ;;
+            --stop-pf)
+                STOP_PORT_FORWARDS=true
                 shift
                 ;;
             --help)
@@ -294,6 +308,76 @@ deploy_aws() {
     log "Deploy AWS concluído"
 }
 
+setup_port_forwards() {
+    info "=== Configurando Port-forwards para localhost ==="
+    
+    # Parar port-forwards existentes
+    pkill -f "kubectl port-forward" 2>/dev/null || true
+    
+    # Aguardar um pouco para garantir que os processos foram finalizados
+    sleep 2
+    
+    # Configurar port-forwards em background
+    info "Configurando port-forward para foo-service em localhost:8080..."
+    nohup kubectl port-forward svc/foo-service 8080:9898 > /tmp/foo-portforward.log 2>&1 &
+    FOO_PF_PID=$!
+    
+    info "Configurando port-forward para bar-service em localhost:8081..."
+    nohup kubectl port-forward svc/bar-service 8081:9898 > /tmp/bar-portforward.log 2>&1 &
+    BAR_PF_PID=$!
+    
+    info "Configurando port-forward para test-service em localhost:8082..."
+    nohup kubectl port-forward svc/test-service 8082:9898 > /tmp/test-portforward.log 2>&1 &
+    TEST_PF_PID=$!
+    
+    # Aguardar um pouco para os port-forwards iniciarem
+    sleep 3
+    
+    # Salvar PIDs para cleanup posterior
+    echo "FOO_PF_PID=$FOO_PF_PID" > /tmp/portforward-pids.env
+    echo "BAR_PF_PID=$BAR_PF_PID" >> /tmp/portforward-pids.env
+    echo "TEST_PF_PID=$TEST_PF_PID" >> /tmp/portforward-pids.env
+    
+    # Testar conexões
+    info "Testando conexões localhost..."
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8080/foo > /dev/null 2>&1; then
+            log "✅ foo disponível em http://localhost:8080/foo"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  foo pode demorar alguns segundos para estar disponível em http://localhost:8080/foo"
+        else
+            sleep 2
+        fi
+    done
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8081/bar > /dev/null 2>&1; then
+            log "✅ bar disponível em http://localhost:8081/bar"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  bar pode demorar alguns segundos para estar disponível em http://localhost:8081/bar"
+        else
+            sleep 2
+        fi
+    done
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8082/test > /dev/null 2>&1; then
+            log "✅ test disponível em http://localhost:8082/test"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  test pode demorar alguns segundos para estar disponível em http://localhost:8082/test"
+        else
+            sleep 2
+        fi
+    done
+    
+    log "Port-forwards configurados com sucesso!"
+    log "💡 Para parar todos os port-forwards: pkill -f 'kubectl port-forward'"
+}
+
 deploy_local() {
     title "Fazendo Deploy Local"
     
@@ -318,6 +402,9 @@ deploy_local() {
     fi
     
     bash src/scripts/local_deploy.sh
+    
+    # Configurar port-forwards após o deploy
+    setup_port_forwards
     
     log "Deploy local concluído"
 }
@@ -383,8 +470,32 @@ clean_aws() {
     fi
 }
 
+stop_port_forwards() {
+    info "Parando port-forwards existentes..."
+    
+    # Parar port-forwards pelo PID se disponível
+    if [ -f "/tmp/portforward-pids.env" ]; then
+        source /tmp/portforward-pids.env
+        [ -n "$FOO_PF_PID" ] && kill $FOO_PF_PID 2>/dev/null || true
+        [ -n "$BAR_PF_PID" ] && kill $BAR_PF_PID 2>/dev/null || true
+        [ -n "$TEST_PF_PID" ] && kill $TEST_PF_PID 2>/dev/null || true
+        rm -f /tmp/portforward-pids.env
+    fi
+    
+    # Parar todos os port-forwards como backup
+    pkill -f "kubectl port-forward" 2>/dev/null || true
+    
+    # Limpar logs
+    rm -f /tmp/foo-portforward.log /tmp/bar-portforward.log /tmp/test-portforward.log 2>/dev/null || true
+    
+    log "Port-forwards parados"
+}
+
 clean_local() {
     title "Limpando Recursos Locais"
+    
+    # Parar port-forwards primeiro
+    stop_port_forwards
     
     # Garantir kubectl funciona antes de limpar
     ensure_kubectl_working || true
@@ -441,6 +552,22 @@ show_status() {
 main() {
     parse_args "$@"
     
+    # Tratar opções específicas de port-forwards
+    if [ "$STOP_PORT_FORWARDS" = "true" ]; then
+        stop_port_forwards
+        exit 0
+    fi
+    
+    if [ "$PORT_FORWARDS_ONLY" = "true" ]; then
+        # Verificar se kubectl funciona antes de configurar port-forwards
+        ensure_kubectl_working || {
+            error "kubectl não está funcionando. Execute primeiro deploy completo."
+            exit 1
+        }
+        setup_port_forwards
+        exit 0
+    fi
+    
     title "Deploy Híbrido Kubernetes - AWS/Local"
     echo "Modo: $ENVIRONMENT"
     echo "AWS_ENABLED: $AWS_ENABLED"
@@ -491,9 +618,34 @@ main() {
     title "Deploy Concluído!"
     
     if [ "$AWS_ENABLED" = "true" ]; then
+        if [ "$AWS_ENABLED" = "true" ]; then
         log "🌩️  Recursos criados na AWS"
         log "🔍 Verifique o console AWS para URLs e IPs"
         log "💰 Lembre-se de destruir recursos quando não precisar: $0 --aws --clean"
+    else
+        if [ "$USE_UBUNTU" = "true" ]; then
+            log "🏠 Aplicações Ubuntu rodando localmente"
+            log "🐧 Versão: Deployments Ubuntu (kubernetes_ubuntu/)"
+        else
+            log "🏠 Aplicações rodando localmente"
+            log "📦 Versão: Deployments padrão (kubernetes/)"
+        fi
+        log "🌐 Acesso via localhost (port-forward):"
+        log "   • foo: http://localhost:8080/foo"
+        log "   • bar: http://localhost:8081/bar"
+        log "   • test: http://localhost:8082/test"
+        log "🌐 Acesso via Ingress: http://localhost:30080/foo, /bar, /test"
+        log "📊 Monitoramento: http://localhost:30081 (Grafana), http://localhost:30082 (Prometheus)"
+        log "🧪 Teste HPA: bash /tmp/load_test.sh"
+        log "🔄 Parar port-forwards: pkill -f 'kubectl port-forward'"
+        if [ "$USE_UBUNTU" = "true" ]; then
+            log "🗑️  Para limpar: $0 --local --ubuntu --clean"
+        else
+            log "🗑️  Para limpar: $0 --local --clean"
+        fi
+        echo ""
+        log "💡 DICA: Se kubectl der erro, execute: $0 --fix-kubectl"
+    fi
     else
         if [ "$USE_UBUNTU" = "true" ]; then
             log "🏠 Aplicações Ubuntu rodando localmente"

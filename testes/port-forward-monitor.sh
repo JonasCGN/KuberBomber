@@ -41,7 +41,7 @@ stop_all_portforwards() {
 }
 
 # Trap para limpeza ao receber SIGTERM
-trap 'stop_all_portforwards; exit 0' SIGTERM SIGINT
+# trap 'stop_all_portforwards; exit 0' SIGTERM SIGINT
 
 echo "📋 Configurações:"
 echo "  - foo-service: localhost:8080"

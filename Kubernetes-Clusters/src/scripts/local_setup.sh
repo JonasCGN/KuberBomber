@@ -176,12 +176,13 @@ create_kind_cluster() {
 
     log "Criando cluster Kubernetes local com kind (configuração otimizada)..."
 
-    # Criar cluster simples com kind
+    # Criar cluster com 1 control-plane + 2 workers
     cat <<EOF > /tmp/kind-config.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
+  - role: worker
   - role: worker
 EOF
 

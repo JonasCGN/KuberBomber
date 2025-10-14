@@ -15,11 +15,13 @@ import csv
 import select
 import termios
 import tty
-import threading
-import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import statistics
+import threading
+import signal
+import math
+import random
 
 class AcceleratedSimulation:
     """
@@ -27,87 +29,75 @@ class AcceleratedSimulation:
     Permite simular milhares de horas em minutos reais
     """
     def __init__(self, time_acceleration: float = 10000.0, base_mttf_hours: float = 1.0):
-        self.time_acceleration = time_acceleration  # 1h real = X horas simuladas
-        self.base_mttf_hours = base_mttf_hours     # MTTF base em horas
-        self.simulation_start_real = None
-        self.failure_intervals = []                 # Intervalos entre falhas (horas simuladas)
-        self.failure_distribution = "exponential"   # Distribuição para calcular próximas falhas
-    
+        self.time_acceleration = time_acceleration
+        self.base_mttf_hours = base_mttf_hours
+        self.simulation_start_time = None
+        self.failure_intervals = []
+        
     def start_simulation(self):
-        """Inicia contador de tempo da simulação"""
-        self.simulation_start_real = time.time()
+        """Inicia a simulação temporal acelerada"""
+        self.simulation_start_time = time.time()
     
     def get_simulation_time_hours(self) -> float:
-        """Retorna tempo simulado atual em horas"""
-        if not self.simulation_start_real:
+        """Retorna o tempo simulado em horas"""
+        if self.simulation_start_time is None:
             return 0.0
         
-        real_elapsed = time.time() - self.simulation_start_real
-        return (real_elapsed / 3600.0) * self.time_acceleration
+        real_elapsed = time.time() - self.simulation_start_time
+        simulated_hours = real_elapsed * self.time_acceleration / 3600.0
+        return simulated_hours
     
     def calculate_next_failure_interval(self) -> float:
-        """Calcula próximo intervalo de falha baseado na distribuição estatística"""
+        """
+        Calcula o próximo intervalo até falha usando distribuição exponencial
+        Retorna intervalo em horas simuladas
+        """
         current_mttf = self._calculate_current_mttf()
         
-        if self.failure_distribution == "exponential":
-            # Distribuição exponencial (mais comum para falhas de hardware/software)
-            return np.random.exponential(current_mttf)
+        # Usar distribuição exponencial para simular falhas realistas
+        # lambda = 1/MTTF para distribuição exponencial
+        lambda_param = 1.0 / current_mttf if current_mttf > 0 else 1.0
         
-        elif self.failure_distribution == "weibull":
-            # Distribuição Weibull (para desgaste progressivo)
-            shape = 2.0  # β > 1 = taxa de falha crescente
-            scale = current_mttf * np.power(np.log(2), 1.0/shape)
-            return np.random.weibull(shape) * scale
+        # Gerar intervalo usando distribuição exponencial
+        # Usar método simples sem numpy
+        u = random.random()
+        interval_hours = -math.log(1 - u) / lambda_param
         
-        elif self.failure_distribution == "normal":
-            # Distribuição normal (para falhas previsíveis)
-            std_dev = current_mttf * 0.2  # 20% de variação
-            return max(0.1, np.random.normal(current_mttf, std_dev))
-        
-        else:
-            return current_mttf
+        return interval_hours
     
     def _calculate_current_mttf(self) -> float:
         """Calcula MTTF atual baseado no histórico de falhas"""
         if len(self.failure_intervals) < 2:
             return self.base_mttf_hours
         
-        # Média dos intervalos recentes (últimas 10 falhas para suavizar)
-        recent_intervals = self.failure_intervals[-10:]
-        return float(np.mean(recent_intervals))
+        # Usar média dos últimos 5 intervalos para calcular MTTF atual
+        recent_intervals = self.failure_intervals[-5:]
+        return sum(recent_intervals) / len(recent_intervals)
     
     def wait_for_next_failure_time(self, interval_hours: float) -> bool:
         """
-        Aguarda o próximo tempo de falha na escala acelerada
-        Retorna True se deve executar falha, False se simulação deve parar
+        Aguarda o tempo real equivalente ao intervalo simulado
+        Retorna True se deve continuar, False se deve parar
         """
-        # Converte horas simuladas para segundos reais
-        real_wait_seconds = (interval_hours / self.time_acceleration) * 3600.0
+        # Converter horas simuladas para segundos reais
+        real_seconds = (interval_hours * 3600.0) / self.time_acceleration
         
-        print(f"⏳ Aguardando próxima falha: {interval_hours:.2f}h simuladas "
-              f"({real_wait_seconds:.1f}s reais)")
-        
-        # Aguarda o tempo real necessário
-        time.sleep(real_wait_seconds)
+        print(f"⏳ Aguardando {interval_hours:.2f}h simuladas ({real_seconds:.1f}s reais) até próxima falha...")
+        time.sleep(real_seconds)
         return True
     
     def register_failure_interval(self, interval_hours: float):
-        """Registra intervalo entre falhas para cálculos futuros"""
+        """Registra um intervalo de falha observado"""
         self.failure_intervals.append(interval_hours)
     
     def get_acceleration_stats(self) -> Dict:
         """Retorna estatísticas da aceleração temporal"""
-        sim_time = self.get_simulation_time_hours()
-        real_time = time.time() - self.simulation_start_real if self.simulation_start_real else 0
-        
         return {
             'time_acceleration': self.time_acceleration,
-            'simulated_hours': sim_time,
-            'real_seconds': real_time,
-            'real_hours': real_time / 3600.0,
-            'compression_ratio': f"1h real = {self.time_acceleration}h simuladas",
+            'simulated_hours': self.get_simulation_time_hours(),
+            'base_mttf_hours': self.base_mttf_hours,
             'current_mttf_hours': self._calculate_current_mttf(),
-            'total_failure_intervals': len(self.failure_intervals)
+            'total_failures': len(self.failure_intervals)
         }
 
 class ReliabilityTester:
@@ -549,42 +539,92 @@ class ReliabilityTester:
             return False, command
     
     def kill_worker_node_processes(self, target: str) -> Tuple[bool, str]:
-        """Mata todos os processos de um worker node (via docker restart em Kind)"""
-        command = f"docker restart {target}"
-        print(f"� Executando: {command}")
-        print(f"🔄 Matando todos os processos do worker node {target}...")
+        """Mata processos críticos do worker node via docker exec (Kind cluster)"""
+        # Lista de processos críticos do Kubernetes no worker node
+        critical_processes = [
+            "kubelet",      # Processo principal do worker node
+            "kube-proxy",   # Proxy de rede do Kubernetes
+            "containerd",   # Runtime de containers
+            "dockerd"       # Docker daemon (se estiver rodando)
+        ]
         
-        try:
-            result = subprocess.run([
-                'docker', 'restart', target
-            ], capture_output=True, text=True, check=True)
+        commands_executed = []
+        
+        print(f"💀 Matando processos críticos do worker node {target}...")
+        
+        for process in critical_processes:
+            print(f"🔪 Executando: docker exec {target} pkill -9 {process}")
             
-            print(f"✅ Todos os processos do worker node {target} foram mortos e reiniciados")
-            return True, command
-            
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro: {e}")
-            return False, command
+            try:
+                result = subprocess.run([
+                    'docker', 'exec', target, 'sh', '-c', f'pkill -9 {process}'
+                ], capture_output=True, text=True)
+                
+                # pkill retorna 1 se não encontrou o processo, mas isso é normal
+                if result.returncode == 0 or result.returncode == 1:
+                    commands_executed.append(f"pkill -9 {process}")
+                    print(f"✅ Comando executado para processo {process}")
+                else:
+                    print(f"⚠️ Erro ao executar pkill para {process}: {result.stderr}")
+                    
+            except Exception as e:
+                print(f"⚠️ Erro ao executar comando para {process}: {e}")
+                
+        # Comando consolidado para logs
+        full_command = f"docker exec {target} sh -c '" + "; ".join([f"pkill -9 {p}" for p in critical_processes]) + "'"
+        
+        if commands_executed:
+            print(f"✅ Comandos executados no worker node {target}: {', '.join(commands_executed)}")
+            print(f"🔄 Worker node pode precisar de alguns segundos para se recuperar...")
+            return True, full_command
+        else:
+            print(f"❌ Nenhum comando foi executado com sucesso no worker node {target}")
+            return False, full_command
     
     def kill_control_plane_processes(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
-        """Mata todos os processos do control plane (via docker restart em Kind)"""
-        command = f"docker restart {target}"
-        print(f"💀 Executando: {command}")
-        print(f"🎛️ Matando todos os processos do control plane {target}...")
+        """Mata processos críticos do control plane via docker exec (Kind cluster)"""
+        # Lista de processos críticos do Kubernetes no control plane
+        critical_processes = [
+            "kube-apiserver",        # API Server
+            "kube-controller-manager", # Controller Manager
+            "kube-scheduler",        # Scheduler
+            "etcd"                   # etcd database
+        ]
         
-        try:
-            result = subprocess.run([
-                'docker', 'restart', target
-            ], capture_output=True, text=True, check=True)
+        commands_executed = []
+        
+        print(f"💀 Matando processos críticos do control plane {target}...")
+        
+        for process in critical_processes:
+            print(f"🔪 Executando: docker exec {target} pkill -9 {process}")
             
-            print(f"✅ Todos os processos do control plane {target} foram mortos e reiniciados")
-            return True, command
-            
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro: {e}")
-            return False, command
-    
-    # ============ TESTE DE CONFIABILIDADE ============
+            try:
+                result = subprocess.run([
+                    'docker', 'exec', target, 'sh', '-c', f'pkill -9 {process}'
+                ], capture_output=True, text=True)
+                
+                # pkill retorna 1 se não encontrou o processo, mas isso é normal
+                if result.returncode == 0 or result.returncode == 1:
+                    commands_executed.append(f"pkill -9 {process}")
+                    print(f"✅ Comando executado para processo {process}")
+                else:
+                    print(f"⚠️ Erro ao executar pkill para {process}: {result.stderr}")
+                    
+            except Exception as e:
+                print(f"⚠️ Erro ao executar comando para {process}: {e}")
+                
+        # Comando consolidado para logs
+        full_command = f"docker exec {target} sh -c '" + "; ".join([f"pkill -9 {p}" for p in critical_processes]) + "'"
+        
+        if commands_executed:
+            print(f"✅ Comandos executados no control plane {target}: {', '.join(commands_executed)}")
+            print(f"🔄 Control plane pode precisar de alguns segundos para se recuperar...")
+            return True, full_command
+        else:
+            print(f"❌ Nenhum comando foi executado com sucesso no control plane {target}")
+            return False, full_command
+
+    # ============ MÉTODOS DE TESTE DE CONFIABILIDADE ============
     
     def run_reliability_test(self, component_type: str, failure_method: str, 
                            target: Optional[str] = None, iterations: int = 30, 
@@ -643,9 +683,9 @@ class ReliabilityTester:
             print("💡 Possíveis soluções:")
             print("   1. Verifique se os pods estão rodando: kubectl get pods")
             print("   2. Configure port-forwards:")
-            print("      kubectl port-forward svc/foo-service 8080:80 &")
-            print("      kubectl port-forward svc/bar-service 8081:80 &")
-            print("      kubectl port-forward svc/test-service 8082:80 &")
+            print("      kubectl port-forward svc/foo-service 8080:9898 &")
+            print("      kubectl port-forward svc/bar-service 8081:9898 &")
+            print("      kubectl port-forward svc/test-service 8082:9898 &")
             print("   3. Ou execute o script port-forward-monitor.sh")
             print("\n🔧 Deseja continuar mesmo assim? (y/N):")
             
@@ -814,350 +854,6 @@ class ReliabilityTester:
                     writer.writerow(stats)
             
             print(f"💾 Métricas individuais por componente salvos em: {metrics_filepath}")
-    
-    def run_multi_component_test(self, component_type: str, failure_method: str,
-                                iterations: int = 10, interval: int = 30):
-        """
-        Executa teste em TODOS os componentes do tipo especificado
-        para comparar MTTR individual de cada um
-        """
-        print(f"\n🧪 === TESTE MULTI-COMPONENTE ===")
-        print(f"📊 Testando TODOS os componentes do tipo: {component_type}")
-        print(f"🔨 Método de falha: {failure_method}")
-        print(f"🔢 Iterações por componente: {iterations}")
-        print(f"⏱️ Intervalo: {interval}s")
-        print("="*60)
-        
-        # Obter todos os componentes do tipo
-        if component_type == 'pod':
-            targets = self.get_pods()
-        elif component_type == 'worker_node':
-            targets = self.get_worker_nodes()
-        else:
-            print(f"❌ Tipo de componente '{component_type}' não suporta teste multi-componente")
-            return
-        
-        if not targets:
-            print(f"❌ Nenhum {component_type} encontrado")
-            return
-        
-        print(f"🎯 Componentes encontrados: {targets}")
-        
-        # Testar cada componente individualmente
-        for target in targets:
-            print(f"\n🔄 === TESTANDO COMPONENTE: {target} ===")
-            
-            # Executar teste para este componente específico
-            self.run_reliability_test(
-                component_type=component_type,
-                failure_method=failure_method,
-                target=target,
-                iterations=iterations,
-                interval=interval
-            )
-            
-            # Mostrar métricas deste componente
-            stats = self.get_component_statistics(target)
-            if stats:
-                print(f"\n📊 Resumo para {target}:")
-                print(f"   ⏱️ MTTR Médio: {stats['mttr_mean']:.2f}s")
-                print(f"   📈 Disponibilidade: {stats['availability_percent']:.1f}%")
-        
-        # Comparação final entre todos os componentes
-        self.compare_component_reliability()
-    
-    def compare_component_reliability(self):
-        """Compara métricas de confiabilidade entre diferentes componentes"""
-        if len(self.component_metrics) < 2:
-            print("📊 Não há componentes suficientes para comparação")
-            return
-        
-        print(f"\n📊 === COMPARAÇÃO DE CONFIABILIDADE ===")
-        
-        # Criar lista ordenada por MTTR
-        components_stats = []
-        for component_id in self.component_metrics:
-            stats = self.get_component_statistics(component_id)
-            if stats['mttr_mean'] > 0:
-                components_stats.append(stats)
-        
-        # Ordenar por MTTR (menor = melhor)
-        components_stats.sort(key=lambda x: x['mttr_mean'])
-        
-        print("🏆 Ranking por MTTR (Menor = Mais Confiável):")
-        for i, stats in enumerate(components_stats, 1):
-            print(f"{i}. {stats['component_id']}")
-            print(f"   ⏱️ MTTR: {stats['mttr_mean']:.2f}s")
-            print(f"   📈 Disponibilidade: {stats['availability_percent']:.1f}%")
-            print(f"   💥 Falhas testadas: {stats['total_failures']}")
-        
-        # Estatísticas comparativas
-        mttr_values = [s['mttr_mean'] for s in components_stats]
-        availability_values = [s['availability_percent'] for s in components_stats]
-        
-        print(f"\n📈 Estatísticas Comparativas:")
-        print(f"⏱️ MTTR - Melhor: {min(mttr_values):.2f}s | Pior: {max(mttr_values):.2f}s | Média: {statistics.mean(mttr_values):.2f}s")
-        print(f"📊 Disponibilidade - Melhor: {max(availability_values):.1f}% | Pior: {min(availability_values):.1f}% | Média: {statistics.mean(availability_values):.1f}%")
-        
-        # Identificar componentes problemáticos
-        mean_mttr = statistics.mean(mttr_values)
-        problematic = [s for s in components_stats if s['mttr_mean'] > mean_mttr * 1.5]
-        
-        if problematic:
-            print(f"\n⚠️ Componentes com MTTR acima da média (>{mean_mttr * 1.5:.2f}s):")
-            for comp in problematic:
-                print(f"   🔴 {comp['component_id']}: {comp['mttr_mean']:.2f}s")
-        
-        print("="*60)
-
-    def run_accelerated_simulation(self, duration_hours: float = 1000.0, 
-                                 failure_modes: Optional[List[str]] = None,
-                                 target_components: Optional[List[str]] = None) -> Dict:
-        """
-        Executa simulação acelerada de confiabilidade
-        
-        Args:
-            duration_hours: Duração da simulação em horas simuladas
-            failure_modes: Lista de métodos de falha a usar
-            target_components: Lista de componentes específicos a testar
-        """
-        if not self.simulation_mode:
-            print("❌ Simulação acelerada requer time_acceleration > 1.0")
-            return {}
-        
-        print(f"\n🚀 === SIMULAÇÃO ACELERADA DE CONFIABILIDADE ===")
-        print(f"⏱️ Duração: {duration_hours}h simuladas")
-        print(f"🔥 Aceleração: {self.accelerated_sim.time_acceleration}x")
-        print(f"📊 Base MTTF: {self.accelerated_sim.base_mttf_hours}h")
-        print("="*60)
-        
-        # Configuração padrão
-        if not failure_modes:
-            failure_modes = ['kill_processes', 'delete_pod']
-        
-        if not target_components:
-            # Busca automaticamente pods disponíveis
-            target_components = self.get_pods()
-            if not target_components:
-                print("❌ Nenhum pod encontrado para simulação")
-                return {}
-        
-        print(f"🎯 Componentes alvo: {target_components}")
-        print(f"🔨 Métodos de falha: {failure_modes}")
-        
-        # Verificação inicial do sistema
-        healthy_count, _ = self.initial_system_check()
-        if healthy_count == 0:
-            print("⚠️ Sistema não está saudável - continuando simulação mesmo assim")
-        
-        # Inicia simulação
-        self.accelerated_sim.start_simulation()
-        self.simulation_running = True
-        self.stop_simulation_event.clear()
-        
-        # Estatísticas da simulação
-        simulation_stats = {
-            'total_failures': 0,
-            'successful_recoveries': 0,
-            'failed_recoveries': 0,
-            'total_simulated_time': 0.0,
-            'total_real_time': 0.0,
-            'failure_history': [],
-            'mttr_values': [],
-            'mttf_values': []
-        }
-        
-        last_failure_time = 0.0
-        
-        try:
-            while self.accelerated_sim.get_simulation_time_hours() < duration_hours:
-                if self.stop_simulation_event.is_set():
-                    break
-                
-                # Calcula próximo intervalo de falha
-                failure_interval = self.accelerated_sim.calculate_next_failure_interval()
-                
-                # Aguarda tempo de falha na escala acelerada
-                if not self.accelerated_sim.wait_for_next_failure_time(failure_interval):
-                    break
-                
-                current_sim_time = self.accelerated_sim.get_simulation_time_hours()
-                
-                # Registra intervalo entre falhas
-                if simulation_stats['total_failures'] > 0:
-                    actual_interval = current_sim_time - last_failure_time
-                    self.accelerated_sim.register_failure_interval(actual_interval)
-                    simulation_stats['mttf_values'].append(actual_interval)
-                
-                last_failure_time = current_sim_time
-                
-                # Seleciona alvo e método de falha aleatoriamente
-                target = np.random.choice(target_components)
-                failure_method = np.random.choice(failure_modes)
-                
-                print(f"\n💥 === FALHA #{simulation_stats['total_failures'] + 1} ===")
-                print(f"⏰ Tempo simulado: {current_sim_time:.2f}h")
-                print(f"🎯 Alvo: {target}")
-                print(f"🔨 Método: {failure_method}")
-                
-                # Executa falha
-                failure_start = time.time()
-                failure_success, executed_command = self.failure_methods[failure_method](target)
-                
-                if not failure_success:
-                    print(f"❌ Falha na execução - continuando simulação")
-                    continue
-                
-                simulation_stats['total_failures'] += 1
-                
-                # Monitora recuperação
-                print("⏳ Monitorando recuperação...")
-                recovered, recovery_time = self.wait_for_recovery(timeout=300)
-                
-                # Registra estatísticas
-                failure_record = {
-                    'simulation_time_hours': current_sim_time,
-                    'real_time_seconds': time.time() - failure_start,
-                    'target': target,
-                    'failure_method': failure_method,
-                    'executed_command': executed_command,
-                    'recovery_time_seconds': recovery_time,
-                    'recovered': recovered,
-                    'failure_interval_hours': failure_interval
-                }
-                
-                simulation_stats['failure_history'].append(failure_record)
-                
-                if recovered:
-                    simulation_stats['successful_recoveries'] += 1
-                    simulation_stats['mttr_values'].append(recovery_time)
-                    print(f"✅ Recuperação bem-sucedida em {recovery_time:.2f}s")
-                else:
-                    simulation_stats['failed_recoveries'] += 1
-                    print(f"❌ Falha na recuperação (timeout)")
-                
-                # Atualiza métricas do componente
-                self.update_component_metrics(target, 'pod', recovery_time, recovered)
-                
-                # Mostra progresso
-                progress = (current_sim_time / duration_hours) * 100
-                print(f"📊 Progresso: {progress:.1f}% ({current_sim_time:.1f}h/{duration_hours}h)")
-        
-        except KeyboardInterrupt:
-            print("\n⚠️ Simulação interrompida pelo usuário")
-        
-        finally:
-            self.simulation_running = False
-            
-        # Calcula estatísticas finais
-        simulation_stats['total_simulated_time'] = self.accelerated_sim.get_simulation_time_hours()
-        if self.accelerated_sim.simulation_start_real:
-            simulation_stats['total_real_time'] = time.time() - self.accelerated_sim.simulation_start_real
-        else:
-            simulation_stats['total_real_time'] = 0.0
-        
-        # Salva resultados
-        self._save_accelerated_simulation_results(simulation_stats)
-        
-        # Mostra resumo
-        self._print_accelerated_simulation_summary(simulation_stats)
-        
-        return simulation_stats
-    
-    def _save_accelerated_simulation_results(self, stats: Dict):
-        """Salva resultados da simulação acelerada"""
-        now = datetime.now()
-        timestamp = now.strftime('%Y%m%d_%H%M%S')
-        
-        # Criar estrutura de pastas
-        year = now.strftime('%Y')
-        month = now.strftime('%m')
-        day = now.strftime('%d')
-        
-        base_dir = os.path.dirname(__file__)
-        date_dir = os.path.join(base_dir, year, month, day)
-        os.makedirs(date_dir, exist_ok=True)
-        
-        # Salvar dados da simulação
-        filename = f"accelerated_simulation_{timestamp}.csv"
-        filepath = os.path.join(date_dir, filename)
-        
-        fieldnames = [
-            'failure_number', 'simulation_time_hours', 'real_time_seconds', 
-            'target', 'failure_method', 'executed_command', 
-            'recovery_time_seconds', 'recovered', 'failure_interval_hours'
-        ]
-        
-        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            
-            for i, record in enumerate(stats['failure_history'], 1):
-                row = {
-                    'failure_number': i,
-                    'simulation_time_hours': record['simulation_time_hours'],
-                    'real_time_seconds': record['real_time_seconds'],
-                    'target': record['target'],
-                    'failure_method': record['failure_method'],
-                    'executed_command': record['executed_command'],
-                    'recovery_time_seconds': record['recovery_time_seconds'],
-                    'recovered': record['recovered'],
-                    'failure_interval_hours': record['failure_interval_hours']
-                }
-                writer.writerow(row)
-        
-        print(f"💾 Simulação acelerada salva em: {filepath}")
-        
-        # Salva métricas de componentes se existirem
-        if self.component_metrics:
-            metrics_filename = f"accelerated_component_metrics_{timestamp}.csv"
-            metrics_filepath = os.path.join(date_dir, metrics_filename)
-            
-            metrics_fieldnames = [
-                'component_id', 'component_type', 'total_failures', 'successful_recoveries',
-                'availability_percent', 'mttr_mean', 'mttr_median', 'mttr_min', 'mttr_max', 'mttr_std_dev'
-            ]
-            
-            with open(metrics_filepath, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=metrics_fieldnames)
-                writer.writeheader()
-                
-                for component_id in self.component_metrics:
-                    stats_comp = self.get_component_statistics(component_id)
-                    writer.writerow(stats_comp)
-            
-            print(f"💾 Métricas de componentes salvas em: {metrics_filepath}")
-    
-    def _print_accelerated_simulation_summary(self, stats: Dict):
-        """Imprime resumo da simulação acelerada"""
-        print(f"\n🚀 === RESUMO DA SIMULAÇÃO ACELERADA ===")
-        print(f"⏱️ Tempo simulado: {stats['total_simulated_time']:.2f}h")
-        print(f"🕐 Tempo real: {stats['total_real_time']:.1f}s ({stats['total_real_time']/60:.1f}min)")
-        print(f"🔥 Fator de aceleração: {stats['total_simulated_time'] / (stats['total_real_time'] / 3600.0):.1f}x")
-        print(f"💥 Total de falhas: {stats['total_failures']}")
-        print(f"✅ Recuperações bem-sucedidas: {stats['successful_recoveries']}")
-        print(f"❌ Falhas de recuperação: {stats['failed_recoveries']}")
-        
-        if stats['mttr_values']:
-            print(f"⏱️ MTTR médio: {statistics.mean(stats['mttr_values']):.2f}s")
-            print(f"📊 MTTR mediano: {statistics.median(stats['mttr_values']):.2f}s")
-            print(f"📈 MTTR máximo: {max(stats['mttr_values']):.2f}s")
-            print(f"📉 MTTR mínimo: {min(stats['mttr_values']):.2f}s")
-        
-        if stats['mttf_values']:
-            print(f"🔥 MTTF médio: {statistics.mean(stats['mttf_values']):.2f}h")
-            print(f"📊 MTTF mediano: {statistics.median(stats['mttf_values']):.2f}h")
-        
-        success_rate = (stats['successful_recoveries'] / stats['total_failures'] * 100) if stats['total_failures'] > 0 else 0
-        print(f"📈 Taxa de sucesso: {success_rate:.1f}%")
-        
-        # Disponibilidade calculada
-        if stats['total_simulated_time'] > 0:
-            total_downtime_hours = sum(r['recovery_time_seconds'] for r in stats['failure_history']) / 3600.0
-            availability = max(0, (stats['total_simulated_time'] - total_downtime_hours) / stats['total_simulated_time'] * 100)
-            print(f"📊 Disponibilidade simulada: {availability:.3f}%")
-        
-        print("="*60)
 
 def main():
     parser = argparse.ArgumentParser(description='Testes de Confiabilidade Kubernetes')
@@ -1176,34 +872,10 @@ def main():
                        help='Intervalo entre testes em segundos (default: 60)')
     parser.add_argument('--list-targets', action='store_true',
                        help='Lista alvos disponíveis')
-    parser.add_argument('--multi-component', action='store_true',
-                       help='Testa TODOS os componentes do tipo especificado para comparar MTTRs individuais')
-    parser.add_argument('--compare-only', action='store_true',
-                       help='Apenas compara componentes já testados (não executa novos testes)')
-    
-    # Argumentos para simulação acelerada
-    parser.add_argument('--accelerated', action='store_true',
-                       help='Executa simulação acelerada de confiabilidade')
-    parser.add_argument('--time-acceleration', type=float, default=10000.0,
-                       help='Fator de aceleração temporal (default: 10000.0 = 1h real = 10000h simuladas)')
-    parser.add_argument('--simulation-duration', type=float, default=1000.0,
-                       help='Duração da simulação em horas simuladas (default: 1000h)')
-    parser.add_argument('--base-mttf', type=float, default=1.0,
-                       help='MTTF base em horas para distribuição de falhas (default: 1.0h)')
-    parser.add_argument('--failure-modes', nargs='+', 
-                       choices=['kill_processes', 'kill_init', 'delete_pod'],
-                       help='Métodos de falha para simulação acelerada')
     
     args = parser.parse_args()
     
-    # Cria o tester com configuração de aceleração se especificada
-    if args.accelerated or args.time_acceleration > 1.0:
-        tester = ReliabilityTester(
-            time_acceleration=args.time_acceleration, 
-            base_mttf_hours=args.base_mttf
-        )
-    else:
-        tester = ReliabilityTester()
+    tester = ReliabilityTester()
     
     if args.list_targets:
         print("🎯 === ALVOS DISPONÍVEIS ===")
@@ -1216,63 +888,9 @@ def main():
         print("🎛️ Control Plane: local-k8s-control-plane")
         return
     
-    if args.compare_only:
-        tester.compare_component_reliability()
-        return
-    
-    # Simulação acelerada
-    if args.accelerated:
-        print("🚀 === MODO SIMULAÇÃO ACELERADA ===")
-        print(f"🔥 Aceleração: {args.time_acceleration}x")
-        print(f"⏱️ Duração: {args.simulation_duration}h simuladas")
-        print(f"📊 MTTF base: {args.base_mttf}h")
-        
-        tester.run_accelerated_simulation(
-            duration_hours=args.simulation_duration,
-            failure_modes=args.failure_modes,
-            target_components=None  # Auto-detecta pods
-        )
-        return
-    
-    if args.multi_component:
-        if not args.component or not args.failure_method:
-            print("❌ Para teste multi-componente, especifique --component e --failure-method")
-            return
-        
-        tester.run_multi_component_test(
-            component_type=args.component,
-            failure_method=args.failure_method,
-            iterations=args.iterations,
-            interval=args.interval
-        )
-        return
-    
     if not args.component or not args.failure_method:
         # Modo interativo
         print("🎯 === MODO INTERATIVO ===")
-        
-        # Pergunta se quer simulação acelerada
-        print("🚀 Deseja usar simulação acelerada? (y/N):")
-        try:
-            choice = input().strip().lower()
-            if choice in ['y', 'yes', 's', 'sim']:
-                print("⚡ Configurando simulação acelerada...")
-                print("🔥 Fator de aceleração (ex: 10000 = 1h real = 10000h simuladas):")
-                acceleration = float(input("Aceleração [10000]: ") or "10000")
-                print("⏱️ Duração em horas simuladas:")
-                duration = float(input("Duração [1000]: ") or "1000")
-                
-                # Recria tester com aceleração
-                tester = ReliabilityTester(time_acceleration=acceleration, base_mttf_hours=1.0)
-                
-                tester.run_accelerated_simulation(
-                    duration_hours=duration,
-                    failure_modes=['kill_processes', 'delete_pod'],
-                    target_components=None
-                )
-                return
-        except (ValueError, KeyboardInterrupt):
-            print("❌ Continuando com modo normal")
         
         # Selecionar componente
         components = ['pod', 'worker_node', 'control_plane']
@@ -1295,7 +913,7 @@ def main():
         component = args.component
         failure_method = args.failure_method
     
-    # Executar teste normal
+    # Executar teste
     tester.run_reliability_test(
         component_type=component,
         failure_method=failure_method,

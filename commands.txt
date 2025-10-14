@@ -1,3 +1,4 @@
 #Rodar a simulação de falhas
 python main.py reliability start
 
+python3 reliability_tester.py --component pod --failure-method kill_processes --target test-app-f784fb8ff-rt5g5 --iterations 30 --interval 60
