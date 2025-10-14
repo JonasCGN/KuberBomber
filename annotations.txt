@@ -13,8 +13,6 @@ cmd = f"kubectl exec {pod_name} -- kill -9 1"
 
 kubectl exec bar-app-6d4f4c8998-9mwxk -- kill -9 1
 
-
-
 watch kubectl get pods -n <namespace>
 
 Reação default
