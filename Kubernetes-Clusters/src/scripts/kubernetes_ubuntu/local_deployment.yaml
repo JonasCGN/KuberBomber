@@ -20,7 +20,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args: 
             - |
-              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              # Instalar ferramentas básicas do Linux
               apk add --no-cache procps util-linux busybox-extras curl
               pip install flask
               cat > /app.py << 'EOF'
@@ -101,7 +101,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args: 
             - |
-              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              # Instalar ferramentas básicas do Linux
               apk add --no-cache procps util-linux busybox-extras curl
               pip install flask
               cat > /app.py << 'EOF'
@@ -126,7 +126,6 @@ spec:
                   app.run(host='0.0.0.0', port=9898, debug=False)
               EOF
               python /app.py
-              python3 /app.py
           env:
             - name: LOAD
               value: "0.5"
@@ -183,7 +182,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args: 
             - |
-              # Instalar ferramentas básicas do Linux (ps, kill, etc)
+              # Instalar ferramentas básicas do Linux
               apk add --no-cache procps util-linux busybox-extras curl
               pip install flask
               cat > /app.py << 'EOF'
@@ -208,14 +207,6 @@ spec:
                   app.run(host='0.0.0.0', port=9898, debug=False)
               EOF
               python /app.py
-                      'delay': delay,
-                      'os': 'ubuntu:20.04',
-                      'version': 'ubuntu-edition'
-                  })
-              if __name__ == '__main__':
-                  app.run(host='0.0.0.0', port=9898, debug=False)
-              EOF
-              python3 /app.py
           env:
             - name: LOAD
               value: "0.3"

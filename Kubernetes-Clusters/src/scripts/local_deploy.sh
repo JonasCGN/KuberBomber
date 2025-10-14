@@ -10,7 +10,7 @@ set -e
 AWS_ENABLED=${AWS_ENABLED:-false}
 CLUSTER_NAME="local-k8s"
 NAMESPACE="default"
-KUBERNETES_DIR=${KUBERNETES_DIR:-"src/scripts/kubernetes"}
+KUBERNETES_DIR=${KUBERNETES_DIR:-"src/scripts/kubernetes_ubuntu"}
 
 # Cores para output
 RED='\033[0;31m'
@@ -51,18 +51,15 @@ check_prerequisites() {
     fi
     
     # Verificar se cluster local existe e está ativo
-    if ! kubectl cluster-info --context $CLUSTER_NAME &> /dev/null; then
+    # Tentar tanto o contexto local-k8s quanto kind-local-k8s
+    if kubectl cluster-info --context $CLUSTER_NAME &> /dev/null; then
+        kubectl config use-context $CLUSTER_NAME
+    elif kubectl cluster-info --context "kind-$CLUSTER_NAME" &> /dev/null; then
+        kubectl config use-context "kind-$CLUSTER_NAME"
+    else
         error "Cluster local não encontrado ou não está ativo."
         error "Execute primeiro: bash src/scripts/local_setup.sh"
         exit 1
-    fi
-    
-    # Usar contexto do cluster local (kind uses context kind-<name>)
-    # Tentamos usar o contexto criado pelo kind, se existir
-    if kubectl config get-contexts --no-headers | grep -q "kind-$CLUSTER_NAME"; then
-        kubectl config use-context "kind-$CLUSTER_NAME" || true
-    else
-        kubectl config use-context $CLUSTER_NAME 2>/dev/null || true
     fi
 
     log "Pré-requisitos OK - usando cluster local $CLUSTER_NAME"
@@ -239,6 +236,12 @@ show_access_info() {
     info "=== URLs de Acesso ==="
     echo ""
     
+    echo "🌐 Aplicações via localhost (port-forward):"
+    echo "   • foo: http://localhost:8080/foo"
+    echo "   • bar: http://localhost:8081/bar" 
+    echo "   • test: http://localhost:8082/test"
+    echo ""
+    
     # Obter IP do control-plane
     CONTROL_PLANE_IP=$(kubectl get node local-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
     
@@ -282,7 +285,8 @@ show_access_info() {
     echo "   • Escalar: kubectl scale deployment foo-app --replicas=3"
     echo "   • Status HPA: kubectl get hpa"
     echo "   • Métricas de pods: kubectl top pods"
-    echo "   • Deletar tudo: kubectl delete -f src/scripts/kubernetes/"
+    echo "   • Parar port-forwards: pkill -f 'kubectl port-forward'"
+    echo "   • Deletar tudo: kubectl delete -f src/scripts/kubernetes_ubuntu/"
     echo ""
 }
 
@@ -296,9 +300,9 @@ echo "=== Teste de Carga para HPA ==="
 
 # URLs para teste
 URLS=(
-    "http://localhost:30080/foo"
-    "http://localhost:30080/bar"
-    "http://localhost:30080/test"
+    "http://localhost:8080/foo"
+    "http://localhost:8081/bar"
+    "http://localhost:8082/test"
 )
 
 # Função para gerar carga
@@ -353,6 +357,75 @@ EOF
     log "Execute: bash /tmp/load_test.sh para testar HPA"
 }
 
+setup_port_forwards() {
+    info "=== Configurando Port-forwards para localhost ==="
+    
+    # Parar port-forwards existentes
+    pkill -f "kubectl port-forward" 2>/dev/null || true
+    
+    # Aguardar um pouco para garantir que os processos foram finalizados
+    sleep 2
+    
+    # Configurar port-forwards em background
+    info "Configurando port-forward para foo-service em localhost:8080..."
+    nohup kubectl port-forward svc/foo-service 8080:9898 > /tmp/foo-portforward.log 2>&1 &
+    FOO_PF_PID=$!
+    
+    info "Configurando port-forward para bar-service em localhost:8081..."
+    nohup kubectl port-forward svc/bar-service 8081:9898 > /tmp/bar-portforward.log 2>&1 &
+    BAR_PF_PID=$!
+    
+    info "Configurando port-forward para test-service em localhost:8082..."
+    nohup kubectl port-forward svc/test-service 8082:9898 > /tmp/test-portforward.log 2>&1 &
+    TEST_PF_PID=$!
+    
+    # Aguardar um pouco para os port-forwards iniciarem
+    sleep 3
+    
+    # Salvar PIDs para cleanup posterior
+    echo "FOO_PF_PID=$FOO_PF_PID" > /tmp/portforward-pids.env
+    echo "BAR_PF_PID=$BAR_PF_PID" >> /tmp/portforward-pids.env
+    echo "TEST_PF_PID=$TEST_PF_PID" >> /tmp/portforward-pids.env
+    
+    # Testar conexões
+    info "Testando conexões localhost..."
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8080/foo > /dev/null; then
+            log "✅ foo disponível em http://localhost:8080/foo"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  foo pode demorar alguns segundos para estar disponível em http://localhost:8080/foo"
+        else
+            sleep 2
+        fi
+    done
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8081/bar > /dev/null; then
+            log "✅ bar disponível em http://localhost:8081/bar"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  bar pode demorar alguns segundos para estar disponível em http://localhost:8081/bar"
+        else
+            sleep 2
+        fi
+    done
+    
+    for i in {1..5}; do
+        if curl -s -f http://localhost:8082/test > /dev/null; then
+            log "✅ test disponível em http://localhost:8082/test"
+            break
+        elif [ $i -eq 5 ]; then
+            warn "⚠️  test pode demorar alguns segundos para estar disponível em http://localhost:8082/test"
+        else
+            sleep 2
+        fi
+    done
+    
+    log "Port-forwards configurados com sucesso!"
+}
+
 cleanup_on_error() {
     error "Erro durante o deploy. Verificando status..."
     kubectl get pods -o wide
@@ -369,6 +442,7 @@ main() {
     deploy_applications
     configure_monitoring
     test_applications
+    setup_port_forwards
     show_cluster_status
     show_access_info
     generate_load_test_script
@@ -378,6 +452,10 @@ main() {
     log "🎉 Suas aplicações estão rodando!"
     log "📝 Execute 'kubectl get all' para ver todos os recursos"
     log "🧪 Execute 'bash /tmp/load_test.sh' para testar HPA"
+    log "🌐 Acesse as aplicações em:"
+    log "   • http://localhost:8080/foo"
+    log "   • http://localhost:8081/bar" 
+    log "   • http://localhost:8082/test"
 }
 
 # Executar função principal

@@ -169,6 +169,8 @@ create_kind_cluster() {
     # Verificar se cluster já existe
     if command -v kind &> /dev/null && kind get clusters | grep -q "^${CLUSTER_NAME}$"; then
         log "Cluster kind ${CLUSTER_NAME} já existe"
+        # Garantir que o contexto está configurado corretamente
+        kubectl config use-context "$CLUSTER_NAME" 2>/dev/null || kubectl config use-context "kind-$CLUSTER_NAME"
         return 0
     fi
 
@@ -185,11 +187,13 @@ EOF
 
     kind create cluster --name "$CLUSTER_NAME" --config /tmp/kind-config.yaml
 
+    # Renomear o contexto para usar o nome simples sem prefixo "kind-"
+    kubectl config rename-context "kind-$CLUSTER_NAME" "$CLUSTER_NAME"
+    
     # Configurar kubectl para usar o cluster criado pelo kind
-    kubectl config use-context "kind-$CLUSTER_NAME" || true
+    kubectl config use-context "$CLUSTER_NAME"
 
-    # Habilitar alguns recursos necessários via kubectl (MetalLB/metrics/ingress serão instalados separadamente)
-    log "Cluster kind criado com sucesso"
+    log "Cluster kind criado com sucesso com contexto '$CLUSTER_NAME'"
 }
 
 install_metallb() {
