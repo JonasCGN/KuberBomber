@@ -9,7 +9,11 @@ fazer um comando de falha
 # Executa comando para matar processo principal (PID 1)
 
 kubectl get pods
-cmd = f"kubectl exec {pod_name} -n {self.namespace} -- kill -9 1"
+cmd = f"kubectl exec {pod_name} -- kill -9 1"
+
+kubectl exec bar-app-6d4f4c8998-9mwxk -- kill -9 1
+
+
 
 watch kubectl get pods -n <namespace>
 

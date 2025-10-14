@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: port-forward-manager
+  labels:
+    app: port-forward-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: port-forward-manager
+  template:
+    metadata:
+      labels:
+        app: port-forward-manager
+    spec:
+      serviceAccountName: port-forward-service-account
+      containers:
+        - name: port-forward-manager
+          image: bitnami/kubectl:latest
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - |
+              echo "🚀 Iniciando Port-Forward Manager..."
+              
+              # Função para verificar se um port-forward está ativo
+              check_portforward() {
+                local service=$1
+                local port=$2
+                local pid_file="/tmp/pf-${service}.pid"
+                
+                if [ -f "$pid_file" ]; then
+                  local pid=$(cat "$pid_file")
+                  if ps -p "$pid" > /dev/null 2>&1; then
+                    return 0  # Port-forward ativo
+                  fi
+                fi
+                return 1  # Port-forward inativo
+              }
+              
+              # Função para iniciar port-forward
+              start_portforward() {
+                local service=$1
+                local port=$2
+                local target_port=$3
+                local pid_file="/tmp/pf-${service}.pid"
+                
+                echo "📡 Iniciando port-forward para ${service} (${port}:${target_port})"
+                kubectl port-forward svc/${service}-service ${port}:${target_port} > /tmp/pf-${service}.log 2>&1 &
+                local pid=$!
+                echo "$pid" > "$pid_file"
+                echo "✅ Port-forward para ${service} iniciado (PID: $pid)"
+              }
+              
+              # Loop principal de monitoramento
+              while true; do
+                echo "🔍 Verificando port-forwards $(date)"
+                
+                # Verificar foo-service
+                if ! check_portforward "foo" "8080"; then
+                  echo "⚠️ Port-forward foo inativo, reiniciando..."
+                  start_portforward "foo" "8080" "9898"
+                fi
+                
+                # Verificar bar-service
+                if ! check_portforward "bar" "8081"; then
+                  echo "⚠️ Port-forward bar inativo, reiniciando..."
+                  start_portforward "bar" "8081" "9898"
+                fi
+                
+                # Verificar test-service
+                if ! check_portforward "test" "8082"; then
+                  echo "⚠️ Port-forward test inativo, reiniciando..."
+                  start_portforward "test" "8082" "9898"
+                fi
+                
+                # Aguardar antes da próxima verificação
+                sleep 30
+              done
+          env:
+            - name: KUBECTL_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: port-forward-service-account
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: port-forward-manager-role
+rules:
+  - apiGroups: [""]
+    resources: ["services", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: port-forward-manager-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: port-forward-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: port-forward-service-account
+    namespace: default
