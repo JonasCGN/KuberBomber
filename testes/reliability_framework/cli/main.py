@@ -73,8 +73,17 @@ Tipos de timeout disponíveis:
                        help='Tipo de componente a testar')
     
     parser.add_argument('--failure-method',
-                       choices=['kill_processes', 'kill_init', 'delete_pod', 
-                               'kill_worker_node_processes', 'kill_control_plane_processes'],
+                       choices=[
+                           # Pod failures
+                           'kill_processes', 'kill_init', 'delete_pod',
+                           # Worker Node failures  
+                           'kill_worker_node_processes', 'restart_worker_node', 'kill_kubelet',
+                           # Control Plane failures
+                           'kill_control_plane_processes', 'kill_kube_apiserver', 
+                           'kill_kube_controller_manager', 'kill_kube_scheduler', 'kill_etcd',
+                           # Network failures
+                           'delete_kube_proxy', 'restart_containerd'
+                       ],
                        help='Método de falha a usar')
     
     parser.add_argument('--target', type=str,

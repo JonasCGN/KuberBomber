@@ -54,6 +54,10 @@ class ReliabilityTester:
         self.pod_injector = PodFailureInjector()
         self.node_injector = NodeFailureInjector()
         
+        # Importar ControlPlaneInjector dinamicamente
+        from ..failure_injectors.control_plane_injector import ControlPlaneInjector
+        self.control_plane_injector = ControlPlaneInjector()
+        
         # Simulação acelerada
         self.accelerated_sim = AcceleratedSimulation(time_acceleration, base_mttf_hours)
         self.simulation_mode = time_acceleration > 1.0
@@ -66,13 +70,28 @@ class ReliabilityTester:
         self.simulation_thread = None
         self.stop_simulation_event = threading.Event()
         
-        # Mapeamento de métodos de falha
+        # Mapeamento de métodos de falha - TODOS da tabela
         self.failure_methods = {
+            # === POD FAILURES ===
             'kill_processes': self.pod_injector.kill_all_processes,
             'kill_init': self.pod_injector.kill_init_process,
             'delete_pod': self.pod_injector.delete_pod,
+            
+            # === WORKER NODE FAILURES ===
             'kill_worker_node_processes': self.node_injector.kill_worker_node_processes,
-            'kill_control_plane_processes': self.node_injector.kill_control_plane_processes
+            'restart_worker_node': self.node_injector.kill_worker_node_processes,  # Mesmo que kill (docker restart)
+            'kill_kubelet': self.control_plane_injector.kill_kubelet,
+            
+            # === CONTROL PLANE FAILURES ===
+            'kill_control_plane_processes': self.node_injector.kill_control_plane_processes,
+            'kill_kube_apiserver': self.control_plane_injector.kill_kube_apiserver,
+            'kill_kube_controller_manager': self.control_plane_injector.kill_kube_controller_manager,
+            'kill_kube_scheduler': self.control_plane_injector.kill_kube_scheduler,
+            'kill_etcd': self.control_plane_injector.kill_etcd,
+            
+            # === NETWORK/RUNTIME FAILURES ===
+            'delete_kube_proxy': self.control_plane_injector.delete_kube_proxy_pod,
+            'restart_containerd': self.control_plane_injector.restart_containerd
         }
     
     def initial_system_check(self) -> Tuple[int, Dict]:
