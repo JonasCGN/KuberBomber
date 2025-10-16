@@ -59,19 +59,6 @@ python3 reliability_tester.py \
   --interval 60
 ```
 
-**Self-healing:** ✅ Container reinicia automaticamente
-
-### 1.3 Delete Pod
-
-```bash
-python3 reliability_tester.py \
-  --component pod \
-  --failure-method delete_pod \
-  --target test-app-549846444f-pbsgl \
-  --iterations 30 \
-  --interval 60
-```
-
 **Self-healing:** ✅ ReplicaSet/Deployment cria novo pod automaticamente
 
 ## 🖥️ 2. Testes de Worker Nodes

@@ -32,14 +32,6 @@ python3 reliability_tester.py \
   --iterations 30 \
   --interval 60
 
-# 3. Pod inteiro - delete pod (ReplicaSet recria)
-python3 reliability_tester.py \
-  --component pod \
-  --failure-method delete_pod \
-  --target test-app-549846444f-pbsgl \
-  --iterations 30 \
-  --interval 60
-
 # 4. Teste em outro pod (foo-app)
 python3 reliability_tester.py \
   --component pod \

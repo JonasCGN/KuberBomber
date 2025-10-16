@@ -9,7 +9,7 @@ durante a execução dos testes.
 import os
 import csv
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 
 class CSVReporter:
@@ -40,10 +40,10 @@ class CSVReporter:
         self.current_csvfile = None
         self._is_realtime_active = False
     
-    def _create_date_directory(self) -> str:
+    def _create_full_directory(self, component_type: str, failure_method: str) -> str:
         """
-        Cria estrutura de diretórios por data (ano/mês/dia).
-        
+        Cria estrutura de diretórios:
+        ano/mes/dia/component/<tipo>/<metodo>/
         Returns:
             Caminho do diretório criado
         """
@@ -51,12 +51,28 @@ class CSVReporter:
         year = now.strftime('%Y')
         month = now.strftime('%m')
         day = now.strftime('%d')
-        
-        date_dir = os.path.join(self.base_dir, year, month, day)
-        os.makedirs(date_dir, exist_ok=True)
-        
-        return date_dir
-    
+        full_dir = os.path.join(
+            self.base_dir, year, month, day,
+            'component', component_type, failure_method
+        )
+        os.makedirs(full_dir, exist_ok=True)
+        return full_dir
+    def _create_test_run_directory(self, component_type: str, failure_method: str, timestamp: str) -> str:
+        """
+        Cria estrutura de diretórios:
+        ano/mes/dia/component/<tipo>/<metodo>/<DATAHORA>/
+        Returns:
+            Caminho do diretório criado
+        """
+        year = timestamp[:4]
+        month = timestamp[4:6]
+        day = timestamp[6:8]
+        run_dir = os.path.join(
+            self.base_dir, year, month, day,
+            'component', component_type, failure_method, timestamp
+        )
+        os.makedirs(run_dir, exist_ok=True)
+        return run_dir
     def start_realtime_report(self, component_type: str, failure_method: str, target: str) -> str:
         """
         ⭐ INICIA RELATÓRIO CSV EM TEMPO REAL ⭐
@@ -68,17 +84,15 @@ class CSVReporter:
             component_type: Tipo do componente testado
             failure_method: Método de falha usado
             target: Alvo específico testado
-            
         Returns:
             Caminho do arquivo criado
         """
         now = datetime.now()
         timestamp = now.strftime('%Y%m%d_%H%M%S')
-        date_dir = self._create_date_directory()
-        
-        # Nome do arquivo com informações do teste
-        filename = f"realtime_reliability_test_{component_type}_{failure_method}_{timestamp}.csv"
-        filepath = os.path.join(date_dir, filename)
+        run_dir = self._create_test_run_directory(component_type, failure_method, timestamp)
+        interactions_path = os.path.join(run_dir, 'interactions.csv')
+        self._current_run_dir = run_dir
+        self._current_run_timestamp = timestamp
         
         # Campos do CSV
         fieldnames = [
@@ -89,17 +103,16 @@ class CSVReporter:
         ]
         
         try:
-            self.current_csvfile = open(filepath, 'w', newline='', encoding='utf-8')
+            self.current_csvfile = open(interactions_path, 'w', newline='', encoding='utf-8')
             self.current_writer = csv.DictWriter(self.current_csvfile, fieldnames=fieldnames)
             self.current_writer.writeheader()
             self.current_csvfile.flush()  # Forçar escrita do cabeçalho
-            self.current_file = filepath
+            self.current_file = interactions_path
             self._is_realtime_active = True
-            
-            print(f"📊 📝 Relatório em tempo real iniciado: {filepath}")
+            print(f"📊 📝 Relatório em tempo real iniciado: {interactions_path}")
+            print(f"📁 Estrutura: {run_dir}/interactions.csv e metrics.csv")
             print(f"⚡ CSV será atualizado a cada iteração concluída")
-            return filepath
-            
+            return interactions_path
         except Exception as e:
             print(f"❌ Erro ao iniciar relatório em tempo real: {e}")
             return ""
@@ -208,7 +221,7 @@ class CSVReporter:
         except Exception as e:
             print(f"❌ Erro ao finalizar relatório: {e}")
     
-    def start_simulation_report(self) -> str:
+    def start_simulation_report(self, component_type: str = "simulation", failure_method: str = "accelerated") -> str:
         """
         Inicia relatório de simulação acelerada em tempo real.
         
@@ -217,10 +230,9 @@ class CSVReporter:
         """
         now = datetime.now()
         timestamp = now.strftime('%Y%m%d_%H%M%S')
-        date_dir = self._create_date_directory()
-        
-        filename = f"realtime_accelerated_simulation_{timestamp}.csv"
-        filepath = os.path.join(date_dir, filename)
+        full_dir = self._create_full_directory(component_type, failure_method)
+        filename = f"{timestamp}.csv"
+        filepath = os.path.join(full_dir, filename)
         
         fieldnames = [
             'failure_number', 'simulation_time_hours', 'real_time_seconds', 
@@ -278,13 +290,15 @@ class CSVReporter:
         except Exception as e:
             print(f"❌ Erro ao salvar registro de simulação: {e}")
     
-    def save_component_metrics(self, component_metrics: Dict, suffix: str = ""):
+    def save_component_metrics(self, component_metrics: Dict, suffix: str = "", component_type: Optional[str] = None, failure_method: Optional[str] = None):
         """
         Salva métricas individuais por componente em CSV.
         
         Args:
             component_metrics: Dicionário com métricas por componente
             suffix: Sufixo para o nome do arquivo
+            component_type: Tipo do componente para pasta (obrigatório)
+            failure_method: Método para pasta (obrigatório)
         """
         if not component_metrics:
             print("📊 Nenhuma métrica de componente para salvar")
@@ -292,11 +306,27 @@ class CSVReporter:
         
         now = datetime.now()
         timestamp = now.strftime('%Y%m%d_%H%M%S')
-        date_dir = self._create_date_directory()
-        
-        filename_suffix = f"_{suffix}" if suffix else ""
-        filename = f"component_metrics{filename_suffix}_{timestamp}.csv"
-        filepath = os.path.join(date_dir, filename)
+        # Se não informado, tenta pegar do primeiro item do dict
+        # Extrai tipo e método do primeiro item, se não informado
+        if component_type is None or failure_method is None:
+            for comp_id, metrics in component_metrics.items():
+                if component_type is None:
+                    component_type = str(metrics.get('component_type', 'worker_node'))
+                if failure_method is None:
+                    failure_method = str(metrics.get('failure_method', 'kill_worker_node_processes'))
+                break
+        # Nunca usa 'unknown', sempre pega o método do teste
+        if not component_type:
+            component_type = 'worker_node'
+        if not failure_method:
+            failure_method = 'kill_worker_node_processes'
+        # Diretório igual ao CSV de iteração
+        if hasattr(self, '_current_run_dir') and self._current_run_dir:
+            metrics_dir = self._current_run_dir
+        else:
+            metrics_dir = self._create_test_run_directory(component_type, failure_method, timestamp)
+        filename = "metrics.csv"
+        filepath = os.path.join(metrics_dir, filename)
         
         # Campos das métricas de componente
         fieldnames = [
