@@ -42,7 +42,7 @@ python3 reliability_tester.py \
   --component pod \
   --failure-method kill_processes \
   --target test-app-549846444f-pbsgl \
-  --iterations 30 \
+  --iterations 2 \
   --interval 60
 ```
 
@@ -55,7 +55,7 @@ python3 reliability_tester.py \
   --component pod \
   --failure-method kill_init \
   --target test-app-549846444f-pbsgl \
-  --iterations 30 \
+  --iterations 2 \
   --interval 60
 ```
 
@@ -69,9 +69,9 @@ python3 reliability_tester.py \
 python3 reliability_tester.py \
   --component worker_node \
   --failure-method kill_worker_node_processes \
-  --target local-k8s-worker \
-  --iterations 10 \
-  --interval 120
+  --target local-k8s-worker2 \
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Container do nó volta, pods reiniciam  
@@ -83,9 +83,9 @@ python3 reliability_tester.py \
 python3 reliability_tester.py \
   --component worker_node \
   --failure-method kill_kubelet \
-  --target local-k8s-worker \
-  --iterations 15 \
-  --interval 90
+  --target local-k8s-worker2 \
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Container reinicia kubelet automaticamente  
@@ -97,9 +97,9 @@ python3 reliability_tester.py \
 python3 reliability_tester.py \
   --component worker_node \
   --failure-method delete_kube_proxy \
-  --target local-k8s-worker \
-  --iterations 15 \
-  --interval 90
+  --target local-k8s-worker2 \
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ DaemonSet recria o pod automaticamente  
@@ -111,9 +111,9 @@ python3 reliability_tester.py \
 python3 reliability_tester.py \
   --component worker_node \
   --failure-method restart_containerd \
-  --target local-k8s-worker \
-  --iterations 10 \
-  --interval 120
+  --target local-k8s-worker2 \
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Nó inteiro reinicia  
@@ -128,8 +128,8 @@ python3 reliability_tester.py \
   --component control_plane \
   --failure-method kill_control_plane_processes \
   --target local-k8s-control-plane \
-  --iterations 10 \
-  --interval 120
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Container reinicia com todos os componentes  
@@ -142,8 +142,8 @@ python3 reliability_tester.py \
   --component control_plane \
   --failure-method kill_kube_apiserver \
   --target local-k8s-control-plane \
-  --iterations 15 \
-  --interval 90
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Static Pod reinicia automaticamente  
@@ -156,8 +156,8 @@ python3 reliability_tester.py \
   --component control_plane \
   --failure-method kill_kube_controller_manager \
   --target local-k8s-control-plane \
-  --iterations 15 \
-  --interval 90
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Static Pod reinicia automaticamente  
@@ -170,8 +170,8 @@ python3 reliability_tester.py \
   --component control_plane \
   --failure-method kill_kube_scheduler \
   --target local-k8s-control-plane \
-  --iterations 15 \
-  --interval 90
+  --iterations 2 \
+  --interval 10
 ```
 
 **Self-healing:** ✅ Static Pod reinicia automaticamente  
@@ -184,8 +184,8 @@ python3 reliability_tester.py \
   --component control_plane \
   --failure-method kill_etcd \
   --target local-k8s-control-plane \
-  --iterations 10 \
-  --interval 120 \
+  --iterations 2 \
+  --interval 10 \
   --timeout extended
 ```
 

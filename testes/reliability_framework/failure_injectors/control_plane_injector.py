@@ -39,14 +39,14 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"kubectl exec -n kube-system {target} -- pkill kube-apiserver"
+        command = f"docker exec {target} pkill -9 -f kube-apiserver"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kube-apiserver no {target}...")
         
         try:
-            # Usar docker exec para Kind
+            # Usar docker exec para Kind com -f para match full command line
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', 'kube-apiserver'
+                'docker', 'exec', target, 'pkill', '-9', '-f', 'kube-apiserver'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ kube-apiserver morto (static pod irá reiniciar)")
@@ -66,13 +66,13 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"kubectl exec -n kube-system {target} -- pkill kube-controller"
+        command = f"docker exec {target} pkill -9 -f kube-controller-manager"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kube-controller-manager no {target}...")
         
         try:
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', 'kube-controller'
+                'docker', 'exec', target, 'pkill', '-9', '-f', 'kube-controller-manager'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ kube-controller-manager morto (static pod irá reiniciar)")
@@ -92,13 +92,13 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"kubectl exec -n kube-system {target} -- pkill kube-scheduler"
+        command = f"docker exec {target} pkill -9 -f kube-scheduler"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kube-scheduler no {target}...")
         
         try:
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', 'kube-scheduler'
+                'docker', 'exec', target, 'pkill', '-9', '-f', 'kube-scheduler'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ kube-scheduler morto (static pod irá reiniciar)")
@@ -119,13 +119,13 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"kubectl exec -n kube-system {target} -- pkill etcd"
+        command = f"docker exec {target} pkill -9 -f etcd"
         print(f"🎯 Executando: {command}")
         print(f"⚠️ ATENÇÃO: Matando etcd no {target} - cluster ficará temporariamente indisponível!")
         
         try:
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', 'etcd'
+                'docker', 'exec', target, 'pkill', '-9', '-f', 'etcd'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ etcd morto (static pod irá reiniciar)")
@@ -145,13 +145,13 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"kubectl exec {target} -- pkill kubelet"
+        command = f"docker exec {target} pkill -9 -f kubelet"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kubelet no {target}...")
         
         try:
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', 'kubelet'
+                'docker', 'exec', target, 'pkill', '-9', '-f', 'kubelet'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ kubelet morto (processo irá reiniciar)")
