@@ -9,7 +9,7 @@ set -e
 # Configurações padrão
 AWS_ENABLED=${AWS_ENABLED:-false}
 ENVIRONMENT=${ENVIRONMENT:-local}
-USE_UBUNTU=${USE_UBUNTU:-false}
+USE_UBUNTU=${USE_UBUNTU:-true}
 
 # Cores para output
 RED='\033[0;31m'
@@ -286,7 +286,7 @@ setup_local_environment() {
     if command -v kind &> /dev/null; then
         info "Verificando cluster kind..."
         if kind get clusters | grep -q "local-k8s"; then
-            kubectl config use-context "kind-local-k8s" || true
+            kubectl config use-context "local-k8s" || true
         fi
     fi
     

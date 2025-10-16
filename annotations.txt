@@ -33,3 +33,47 @@ da falha e a recuperação, mais importante é o mttr
 
 Cada aplicação e componente do kubernet tem um mttf e mttr diferente
 =============================================
+
+
+jonascgn@DESKTOP-HK185V6:~/Programas_Curso/1_Artigo$ kubectl get pods
+
+=====================POD Antes========================
+NAME                        READY   STATUS    RESTARTS   AGE
+bar-app-6495f959f6-wktz9    1/1     Running   0          5m27s
+foo-app-6898f5b49f-76c97    1/1     Running   0          5m27s
+test-app-549846444f-pbsgl   1/1     Running   0          5m27s
+======================================================
+
+kubectl exec bar-app-6495f959f6-wktz9 -- sh -c ps aux
+kubectl exec bar-app-6495f959f6-wktz9 -- sh -c 'kill -9 -1'
+
+=====================POD Depois========================
+jonascgn@DESKTOP-HK185V6:~/Programas_Curso/1_Artigo$ kubectl get pods
+NAME                        READY   STATUS    RESTARTS     AGE
+bar-app-6495f959f6-wktz9    0/1     Running   1 (4s ago)   7m50s
+foo-app-6898f5b49f-76c97    1/1     Running   0            7m50s
+test-app-549846444f-pbsgl   1/1     Running   0            7m50s
+======================================================
+
+=====================POD Depois de um tempo===========
+NAME                        READY   STATUS    RESTARTS       AGE
+bar-app-6495f959f6-wktz9    1/1     Running   1 (4m6s ago)   11m
+foo-app-6898f5b49f-76c97    1/1     Running   0              11m
+test-app-549846444f-pbsgl   1/1     Running   0              11m
+======================================================
+
+=====================POD Depois de um tempo===========
+NAME                        READY   STATUS    RESTARTS      AGE
+bar-app-6495f959f6-wktz9    0/1     Running   2 (23s ago)   20m
+foo-app-6898f5b49f-76c97    1/1     Running   0             20m
+test-app-549846444f-pbsgl   1/1     Running   0             20m
+======================================================
+
+=====================POD Depois de um tempo===========
+NAME                        READY   STATUS    RESTARTS       AGE
+bar-app-6495f959f6-wktz9    1/1     Running   2 (4m6s ago)   24m
+foo-app-6898f5b49f-76c97    1/1     Running   0              24m
+test-app-549846444f-pbsgl   1/1     Running   0              24m
+======================================================
+
+curl http://localhost:8080/foo
