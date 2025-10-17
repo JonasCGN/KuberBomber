@@ -28,7 +28,7 @@ class HealthChecker:
     
     def check_application_health(self, service: str, verbose: bool = True) -> Dict:
         """
-        Verifica se uma aplicação está respondendo.
+        Verifica se uma aplicação está respondendo usando curl.
         
         Args:
             service: Nome do serviço a verificar
@@ -49,29 +49,54 @@ class HealthChecker:
         if verbose:
             print(f"🔍 Testando {service} em {url}")
         
+        # Usar curl para medir status e tempo total
+        # -sS: silencioso com erros
+        # -o /dev/null: descarta corpo
+        # -w: imprime código HTTP e tempo total
+        # --max-time 5: timeout de 5s
         try:
-            start_time = time.time()
-            response = requests.get(url, timeout=5)
-            response_time = time.time() - start_time
-            
-            if response.status_code == 200:
+            result = subprocess.run(
+                ['curl', '-sS', '-o', '/dev/null', '-w', '%{http_code} %{time_total}', '--max-time', '5', url],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
                 if verbose:
-                    print(f"✅ {service}: OK (HTTP {response.status_code}, {response_time:.3f}s)")
+                    err = result.stderr.strip() or 'curl failed'
+                    print(f"❌ {service}: {err}")
+                return {
+                    'status': 'unreachable',
+                    'response_time': None,
+                    'error': (result.stderr.strip() or 'curl failed')
+                }
+            # Parse "<code> <time>"
+            out = (result.stdout or '').strip()
+            parts = out.split()
+            status_code = int(parts[0]) if parts and parts[0].isdigit() else 0
+            try:
+                response_time = float(parts[1]) if len(parts) > 1 else None
+            except ValueError:
+                response_time = None
+            
+            if status_code == 200:
+                if verbose:
+                    rt = response_time if response_time is not None else 0.0
+                    print(f"✅ {service}: OK (HTTP {status_code}, {rt:.3f}s)")
                 return {
                     'status': 'healthy',
                     'response_time': response_time,
-                    'status_code': response.status_code
+                    'status_code': status_code
                 }
             else:
                 if verbose:
-                    print(f"⚠️ {service}: HTTP {response.status_code} ({response_time:.3f}s)")
+                    rt = response_time if response_time is not None else 0.0
+                    print(f"⚠️ {service}: HTTP {status_code} ({rt:.3f}s)")
                 return {
                     'status': 'unhealthy',
                     'response_time': response_time,
-                    'status_code': response.status_code,
-                    'error': f"HTTP {response.status_code}"
+                    'status_code': status_code,
+                    'error': f"HTTP {status_code}"
                 }
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             if verbose:
                 print(f"❌ {service}: {str(e)}")
             return {

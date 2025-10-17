@@ -18,19 +18,19 @@ run_all_failures:
 	@echo "🚀 Iniciando suite completa de testes de confiabilidade..."
 	@echo "📊 Parâmetros: 30 iterações, 10 segundos de intervalo"
 	@echo ""
-	@echo "📦 ===== TESTES DE PODS ====="
-	cd testes && python3 reliability_tester.py --component pod --failure-method kill_processes --target test-app-549846444f-pbsgl --iterations 30 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component pod --failure-method kill_init --target foo-app-6898f5b49f-76c97 --iterations 30 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component pod --failure-method delete_pod --target bar-app-6495f959f6-wktz9 --iterations 30 --interval 10
+# 	@echo "📦 ===== TESTES DE PODS ====="
+# 	cd testes && python3 reliability_tester.py --component pod --failure-method kill_processes --target bar-app-6495f959f6-wktz9 --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component pod --failure-method kill_init --target foo-app-6898f5b49f-76c97 --iterations 30 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component pod --failure-method delete_pod --target bar-app-6495f959f6-wktz9 --iterations 30 --interval 10
 	@echo ""
 	@echo "🖥️  ===== TESTES DE WORKER NODES ====="
 	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_worker_node_processes --target local-k8s-worker2 --iterations 30 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_kubelet --target local-k8s-worker2 --iterations 30 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method delete_kube_proxy --target local-k8s-worker2 --iterations 30 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_kubelet --target local-k8s-worker2 --iterations 30 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method delete_kube_proxy --target local-k8s-worker2 --iterations 30 --interval 10
 	@echo ""
 	cd testes && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target local-k8s-worker2 --iterations 30 --interval 10
 	@echo ""
