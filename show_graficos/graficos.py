@@ -1,27 +1,33 @@
 
+
 import pandas as pd
 import matplotlib
 import os
 import glob
+import zipfile
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 
 # 1. Buscar todos os interactions.csv no database
 base_dir = r'show_graficos/database'
+output_dir = r'show_graficos/plots'
+os.makedirs(output_dir, exist_ok=True)
 csv_files = glob.glob(os.path.join(base_dir, '**/interactions.csv'), recursive=True)
 
+saved_plots = []
+
 for arquivo_csv in csv_files:
-    # Extrair componente e método de falha do caminho
-    # Exemplo: .../database/control_plane/kill_kube_scheduler/20251016_112014/interactions.csv
+    # Extrair componente, método e timestamp do caminho
     partes = arquivo_csv.split(os.sep)
-    # Esperado: .../<database>/<componente>/<metodo>/<timestamp>/interactions.csv
     try:
         idx = partes.index('database')
         componente = partes[idx+1] if len(partes) > idx+1 else 'unknown'
         metodo = partes[idx+2] if len(partes) > idx+2 else 'unknown'
+        timestamp = partes[idx+3] if len(partes) > idx+3 else 'notime'
     except ValueError:
         componente = 'unknown'
         metodo = 'unknown'
+        timestamp = 'notime'
 
     print(f"\nProcessando: {componente} - {metodo} - {arquivo_csv}")
     df = pd.read_csv(arquivo_csv)
@@ -37,4 +43,18 @@ for arquivo_csv in csv_files:
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.xticks(df['iteration'])
     plt.tight_layout()
-    plt.show()
+
+    # Salvar figura
+    plot_filename = f"{componente}__{metodo}__{timestamp}.png"
+    plot_path = os.path.join(output_dir, plot_filename)
+    plt.savefig(plot_path)
+    saved_plots.append(plot_path)
+    plt.close()
+
+# Compactar todos os PNGs em um .zip
+zip_path = os.path.join(output_dir, 'graficos_plots.zip')
+with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    for plot_file in saved_plots:
+        arcname = os.path.basename(plot_file)
+        zipf.write(plot_file, arcname)
+print(f"\n✅ Todos os gráficos salvos em {output_dir} e compactados em {zip_path}")
