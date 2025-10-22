@@ -77,3 +77,33 @@ test-app-549846444f-pbsgl   1/1     Running   0              24m
 ======================================================
 
 curl http://localhost:8080/foo
+
+
+============2025/10/21================
+
+Coisas para fazer na versão final:
+
+- Definir o mttr manualmente de um componente como vm ou aplicação
+- 
+
+Coisas para fazer agora:
+
+- Criar lista de eventos de falha
+
+- Listar Todos Componentes da Infraestrutura(Pods, Nodes, VMs, Aplicações) ->
+  Pegar mttf(valor(ex:800h)) de cada componente e gerar uma falha exponencialmente distribuída com base no mttf de cada componente -> 
+  Pra cada componente que vai falhar na lista, vai pegar o que falha mais proximo falha o componente, 
+  Observa o tempo que demorou pra recuperar(mttr) e depois que se recupera gera um novo tempo de falha pro componente com base no mttf 
+  Verificar os logs e verificar o criterios de disponibildade apartir de quantos pods funcionarao e ver a intersecao
+  entre todos os pods que estao rodando e os que falharam, quanto tempo o sistema ficou indisponivel e quanto tempo ficou disponivel
+  Gerar um relatorio final com base nesses dados
+
+- Executar esse processo N vezes
+
+- Trabalhar com tempo de redução(2880h -> 5minutos, 34000x menor), toda vez que o componente se recupera, ele espera 1min(delay)
+    e depois falha o proximo  dependendo do tempo de recuperacao
+
+- Tempo que espera nao importa sera 1min e computo 8...
+- Tempo que espera nao importa sera 1min e computo 300...
+
+- Os que nao for self-healing, espera 1min

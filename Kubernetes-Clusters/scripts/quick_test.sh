@@ -12,9 +12,9 @@ test_simple() {
     
     response=$(curl -s "$url")
     
-    if [ $? -eq 0 ] && echo "$response" | grep -q "hostname"; then
-        hostname=$(echo "$response" | jq -r '.hostname' 2>/dev/null || echo "parsed OK")
-        echo "✅ OK - $hostname"
+    if [ $? -eq 0 ] && echo "$response" | grep -q "app"; then
+        app=$(echo "$response" | jq -r '.app' 2>/dev/null || echo "parsed OK")
+        echo "✅ OK - $app"
     else
         echo "❌ FAIL"
     fi

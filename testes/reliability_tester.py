@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def main():
     """Ponto de entrada principal."""
     try:
-        from reliability_framework.cli.main import main as cli_main
+        from kuber_bomber.cli.main import main as cli_main
         cli_main()
     except ImportError as e:
         print(f"❌ Erro ao importar módulos: {e}")
@@ -34,8 +34,8 @@ def main():
         
         # Tentar importação manual
         try:
-            from reliability_framework.core.reliability_tester import ReliabilityTester
-            from reliability_framework.utils.config import get_current_recovery_timeout
+            from kuber_bomber.core.reliability_tester import ReliabilityTester
+            from kuber_bomber.utils.config import get_current_recovery_timeout
             
             print("✅ Importações básicas funcionando")
             print(f"⏰ Timeout atual: {get_current_recovery_timeout()}s")

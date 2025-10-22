@@ -61,10 +61,26 @@ class ReliabilityConfig:
         """Inicialização pós-criação do objeto."""
         # Configurar serviços padrão se não especificados
         if self.services is None:
+            # URLs corretas usando LoadBalancer (MetalLB)
             self.services = {
-                'foo': {'port': 8080, 'endpoint': '/foo'},
-                'bar': {'port': 8081, 'endpoint': '/bar'},
-                'test': {'port': 8082, 'endpoint': '/test'}
+                'foo': {
+                    'loadbalancer_url': 'http://172.18.255.201/foo',
+                    'ingress_url': 'http://172.18.255.200/foo',
+                    'port': 8080, 
+                    'endpoint': '/foo'
+                },
+                'bar': {
+                    'loadbalancer_url': 'http://172.18.255.202:81/bar',
+                    'ingress_url': 'http://172.18.255.200/bar',
+                    'port': 8081, 
+                    'endpoint': '/bar'
+                },
+                'test': {
+                    'loadbalancer_url': 'http://172.18.255.203:82/test',
+                    'ingress_url': 'http://172.18.255.200/test',
+                    'port': 8082, 
+                    'endpoint': '/test'
+                }
             }
         
         # Criar diretório de relatórios se não existir

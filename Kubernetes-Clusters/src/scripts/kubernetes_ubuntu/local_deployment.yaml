@@ -62,22 +62,22 @@ spec:
             limits:
               cpu: "200m"   # Reduzido para ambiente local
               memory: "128Mi"
-          livenessProbe:
-            httpGet:
-              path: /foo
-              port: 9898
-            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
-          readinessProbe:
-            httpGet:
-              path: /foo
-              port: 9898
-            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
-            periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 3
+          # livenessProbe:
+          #   httpGet:
+          #     path: /foo
+          #     port: 9898
+          #   initialDelaySeconds: 90     # Reduzido para Alpine leve
+          #   periodSeconds: 30
+          #   timeoutSeconds: 10
+          #   failureThreshold: 5
+          # readinessProbe:
+          #   httpGet:
+          #     path: /foo
+          #     port: 9898
+          #   initialDelaySeconds: 60     # Reduzido para Alpine leve
+          #   periodSeconds: 10
+          #   timeoutSeconds: 10
+          #   failureThreshold: 3
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -143,22 +143,22 @@ spec:
             limits:
               cpu: "200m"   # Reduzido para ambiente local
               memory: "128Mi"
-          livenessProbe:
-            httpGet:
-              path: /bar
-              port: 9898
-            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
-          readinessProbe:
-            httpGet:
-              path: /bar
-              port: 9898
-            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
-            periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 3
+          # livenessProbe:
+          #   httpGet:
+          #     path: /bar
+          #     port: 9898
+          #   initialDelaySeconds: 90     # Reduzido para Alpine leve
+          #   periodSeconds: 30
+          #   timeoutSeconds: 10
+          #   failureThreshold: 5
+          # readinessProbe:
+          #   httpGet:
+          #     path: /bar
+          #     port: 9898
+          #   initialDelaySeconds: 60     # Reduzido para Alpine leve
+          #   periodSeconds: 10
+          #   timeoutSeconds: 10
+          #   failureThreshold: 3
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -224,22 +224,22 @@ spec:
             limits:
               cpu: "200m"   # Reduzido para ambiente local
               memory: "128Mi"
-          livenessProbe:
-            httpGet:
-              path: /test
-              port: 9898
-            initialDelaySeconds: 300    # 5 minutos para instalação Ubuntu
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
-          readinessProbe:
-            httpGet:
-              path: /test
-              port: 9898
-            initialDelaySeconds: 240    # 4 minutos para instalação Ubuntu
-            periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 3
+          # livenessProbe:
+          #   httpGet:
+          #     path: /test
+          #     port: 9898
+          #   initialDelaySeconds: 90     # Reduzido para Alpine leve
+          #   periodSeconds: 30
+          #   timeoutSeconds: 10
+          #   failureThreshold: 5
+          # readinessProbe:
+          #   httpGet:
+          #     path: /test
+          #     port: 9898
+          #   initialDelaySeconds: 60     # Reduzido para Alpine leve
+          #   periodSeconds: 10
+          #   timeoutSeconds: 10
+          #   failureThreshold: 3
 ---
 # HPA para foo-app
 apiVersion: autoscaling/v2

@@ -25,8 +25,8 @@ import os
 # Adicionar o diretório pai ao path para imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from reliability_framework.core.reliability_tester import ReliabilityTester
-from reliability_framework.utils.config import (
+from kuber_bomber.core.reliability_tester import ReliabilityTester
+from kuber_bomber.utils.config import (
     get_config, set_global_recovery_timeout, list_timeout_options, 
     get_current_recovery_timeout, DEFAULT_CONFIG
 )

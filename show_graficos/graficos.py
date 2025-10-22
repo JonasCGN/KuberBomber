@@ -1,12 +1,16 @@
 
 
+
 import pandas as pd
 import matplotlib
 import os
 import glob
 import zipfile
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
+
+# Se True, gera o ZIP dos gráficos
+zipar = False
 
 # 1. Buscar todos os interactions.csv no database
 base_dir = r'show_graficos/database'
@@ -31,9 +35,13 @@ for arquivo_csv in csv_files:
 
     print(f"\nProcessando: {componente} - {metodo} - {arquivo_csv}")
     df = pd.read_csv(arquivo_csv)
+
     # Ignorar a linha RESUMO (transforma em número e remove os que não são)
     df = df[pd.to_numeric(df['iteration'], errors='coerce').notnull()]
     df['iteration'] = df['iteration'].astype(int)
+
+    df = df.iloc[10:]
+    df['iteration'] = range(1, len(df) + 1)
 
     plt.figure(figsize=(12, 6))
     plt.plot(df['iteration'], df['recovery_time_seconds'], marker='o', linestyle='-', color='b')
@@ -51,10 +59,12 @@ for arquivo_csv in csv_files:
     saved_plots.append(plot_path)
     plt.close()
 
-# Compactar todos os PNGs em um .zip
-zip_path = os.path.join(output_dir, 'graficos_plots.zip')
-with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-    for plot_file in saved_plots:
-        arcname = os.path.basename(plot_file)
-        zipf.write(plot_file, arcname)
-print(f"\n✅ Todos os gráficos salvos em {output_dir} e compactados em {zip_path}")
+if zipar:
+    zip_path = os.path.join(output_dir, 'graficos_plots.zip')
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for plot_file in saved_plots:
+            arcname = os.path.basename(plot_file)
+            zipf.write(plot_file, arcname)
+    print(f"\n✅ Todos os gráficos salvos em {output_dir} e compactados em {zip_path}")
+else:
+    print(f"\n✅ Todos os gráficos salvos em {output_dir}")

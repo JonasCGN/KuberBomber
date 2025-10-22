@@ -26,13 +26,14 @@ class HealthChecker:
         """Inicializa o verificador de saúde."""
         self.config = get_config()
     
-    def check_application_health(self, service: str, verbose: bool = True) -> Dict:
+    def check_application_health(self, service: str, verbose: bool = True, use_ingress: bool = False) -> Dict:
         """
         Verifica se uma aplicação está respondendo usando curl.
         
         Args:
             service: Nome do serviço a verificar
             verbose: Se deve imprimir mensagens detalhadas
+            use_ingress: Se deve usar URL do Ingress em vez do LoadBalancer
             
         Returns:
             Dicionário com status da aplicação
@@ -44,10 +45,21 @@ class HealthChecker:
             }
         
         service_config = self.config.services[service]
-        url = f"http://localhost:{service_config['port']}{service_config['endpoint']}"
+        
+        # Escolher URL baseado no parâmetro
+        if use_ingress and 'ingress_url' in service_config:
+            url = service_config['ingress_url']
+            url_type = "Ingress"
+        elif 'loadbalancer_url' in service_config:
+            url = service_config['loadbalancer_url']
+            url_type = "LoadBalancer"
+        else:
+            # Fallback para port-forward local (compatibilidade com versões antigas)
+            url = f"http://localhost:{service_config['port']}{service_config['endpoint']}"
+            url_type = "Port-forward"
         
         if verbose:
-            print(f"🔍 Testando {service} em {url}")
+            print(f"🔍 Testando {service} via {url_type}: {url}")
         
         # Usar curl para medir status e tempo total
         # -sS: silencioso com erros
@@ -66,7 +78,9 @@ class HealthChecker:
                 return {
                     'status': 'unreachable',
                     'response_time': None,
-                    'error': (result.stderr.strip() or 'curl failed')
+                    'error': (result.stderr.strip() or 'curl failed'),
+                    'url': url,
+                    'url_type': url_type
                 }
             # Parse "<code> <time>"
             out = (result.stdout or '').strip()
@@ -84,7 +98,9 @@ class HealthChecker:
                 return {
                     'status': 'healthy',
                     'response_time': response_time,
-                    'status_code': status_code
+                    'status_code': status_code,
+                    'url': url,
+                    'url_type': url_type
                 }
             else:
                 if verbose:
@@ -94,7 +110,9 @@ class HealthChecker:
                     'status': 'unhealthy',
                     'response_time': response_time,
                     'status_code': status_code,
-                    'error': f"HTTP {status_code}"
+                    'error': f"HTTP {status_code}",
+                    'url': url,
+                    'url_type': url_type
                 }
         except Exception as e:
             if verbose:
@@ -102,15 +120,18 @@ class HealthChecker:
             return {
                 'status': 'unreachable',
                 'response_time': None,
-                'error': str(e)
+                'error': str(e),
+                'url': url,
+                'url_type': url_type
             }
     
-    def check_all_applications(self, verbose: bool = True) -> Dict:
+    def check_all_applications(self, verbose: bool = True, use_ingress: bool = False) -> Dict:
         """
         Verifica saúde de todas as aplicações configuradas.
         
         Args:
             verbose: Se deve imprimir mensagens detalhadas
+            use_ingress: Se deve usar URLs do Ingress em vez do LoadBalancer
             
         Returns:
             Dicionário com status de todas as aplicações
@@ -118,7 +139,7 @@ class HealthChecker:
         results = {}
         if self.config.services:
             for service in self.config.services.keys():
-                results[service] = self.check_application_health(service, verbose)
+                results[service] = self.check_application_health(service, verbose, use_ingress)
         return results
     
     def check_port_forwards(self):
@@ -219,13 +240,14 @@ class HealthChecker:
         print(f"❌ Timeout: Aplicações não se recuperaram em {timeout}s")
         return False, timeout
     
-    def wait_for_specific_recovery(self, target_services: list, timeout: Optional[int] = None) -> Tuple[bool, float]:
+    def wait_for_specific_recovery(self, target_services: list, timeout: Optional[int] = None, use_ingress: bool = False) -> Tuple[bool, float]:
         """
         Aguarda recuperação de serviços específicos.
         
         Args:
             target_services: Lista de serviços específicos para aguardar
             timeout: Timeout específico. Se None, usa o configurado globalmente.
+            use_ingress: Se deve usar URLs do Ingress em vez do LoadBalancer
             
         Returns:
             Tuple com (recuperou_com_sucesso, tempo_de_recuperacao)
@@ -246,7 +268,7 @@ class HealthChecker:
             if self.config.services:
                 for service in target_services:
                     if service in self.config.services:
-                        status = self.check_application_health(service, verbose=False)
+                        status = self.check_application_health(service, verbose=False, use_ingress=use_ingress)
                         if status['status'] != 'healthy':
                             all_healthy = False
                             break
@@ -260,3 +282,39 @@ class HealthChecker:
         
         print(f"❌ Timeout: Serviços {target_services} não se recuperaram em {timeout}s")
         return False, timeout
+    
+    def test_connectivity(self):
+        """
+        Testa conectividade com LoadBalancer e Ingress para todas as aplicações.
+        """
+        print("🌐 === TESTE DE CONECTIVIDADE ===")
+        print()
+        
+        print("📡 Testando LoadBalancer (MetalLB):")
+        lb_results = self.check_all_applications(verbose=True, use_ingress=False)
+        lb_healthy = sum(1 for r in lb_results.values() if r['status'] == 'healthy')
+        print(f"   ✅ LoadBalancer: {lb_healthy}/{len(lb_results)} serviços saudáveis")
+        print()
+        
+        print("🚪 Testando Ingress (NGINX):")
+        ing_results = self.check_all_applications(verbose=True, use_ingress=True)
+        ing_healthy = sum(1 for r in ing_results.values() if r['status'] == 'healthy')
+        print(f"   ✅ Ingress: {ing_healthy}/{len(ing_results)} serviços saudáveis")
+        print()
+        
+        print("📊 === RESUMO ===")
+        if lb_healthy == len(lb_results) and ing_healthy == len(ing_results):
+            print("🎉 Todas as aplicações estão acessíveis via LoadBalancer e Ingress!")
+        else:
+            print("⚠️ Alguns serviços podem estar com problemas.")
+            print("💡 Verifique se os pods estão Ready e se o MetalLB/Ingress estão funcionando.")
+        
+        return {
+            'loadbalancer': lb_results,
+            'ingress': ing_results,
+            'summary': {
+                'lb_healthy': lb_healthy,
+                'ing_healthy': ing_healthy,
+                'total': len(lb_results)
+            }
+        }
