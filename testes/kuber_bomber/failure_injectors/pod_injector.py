@@ -74,66 +74,66 @@ class PodFailureInjector:
             print(f"❌ Erro: {e}")
             return False, command
     
-    def delete_pod(self, target: str) -> Tuple[bool, str]:
-        """
-        Deleta um pod (será recriado pelo ReplicaSet).
+    # def delete_pod(self, target: str) -> Tuple[bool, str]:
+    #     """
+    #     Deleta um pod (será recriado pelo ReplicaSet).
         
-        Args:
-            target: Nome do pod alvo
+    #     Args:
+    #         target: Nome do pod alvo
             
-        Returns:
-            Tuple com (sucesso, comando_executado)
-        """
-        command = f"kubectl delete pod {target} --context={self.config.context}"
-        print(f"🗑️ Executando: {command}")
+    #     Returns:
+    #         Tuple com (sucesso, comando_executado)
+    #     """
+    #     command = f"kubectl delete pod {target} --context={self.config.context}"
+    #     print(f"🗑️ Executando: {command}")
         
-        try:
-            result = subprocess.run([
-                'kubectl', 'delete', 'pod', target, '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+    #     try:
+    #         result = subprocess.run([
+    #             'kubectl', 'delete', 'pod', target, '--context', self.config.context
+    #         ], capture_output=True, text=True, check=True)
             
-            print(f"✅ Pod {target} deletado")
-            return True, command
+    #         print(f"✅ Pod {target} deletado")
+    #         return True, command
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro: {e}")
-            return False, command
+    #     except subprocess.CalledProcessError as e:
+    #         print(f"❌ Erro: {e}")
+    #         return False, command
     
-    def restart_pod(self, target: str) -> Tuple[bool, str]:
-        """
-        Reinicia um pod forçando sua recriação.
+    # def restart_pod(self, target: str) -> Tuple[bool, str]:
+    #     """
+    #     Reinicia um pod forçando sua recriação.
         
-        Args:
-            target: Nome do pod alvo
+    #     Args:
+    #         target: Nome do pod alvo
             
-        Returns:
-            Tuple com (sucesso, comando_executado)
-        """
-        # Obter o nome do deployment
-        try:
-            result = subprocess.run([
-                'kubectl', 'get', 'pod', target, '--context', self.config.context,
-                '-o', 'jsonpath={.metadata.ownerReferences[0].name}'
-            ], capture_output=True, text=True, check=True)
+    #     Returns:
+    #         Tuple com (sucesso, comando_executado)
+    #     """
+    #     # Obter o nome do deployment
+    #     try:
+    #         result = subprocess.run([
+    #             'kubectl', 'get', 'pod', target, '--context', self.config.context,
+    #             '-o', 'jsonpath={.metadata.ownerReferences[0].name}'
+    #         ], capture_output=True, text=True, check=True)
             
-            owner_name = result.stdout.strip()
+    #         owner_name = result.stdout.strip()
             
-            # Fazer rollout restart
-            command = f"kubectl rollout restart deployment/{owner_name} --context={self.config.context}"
-            print(f"🔄 Executando: {command}")
+    #         # Fazer rollout restart
+    #         command = f"kubectl rollout restart deployment/{owner_name} --context={self.config.context}"
+    #         print(f"🔄 Executando: {command}")
             
-            result = subprocess.run([
-                'kubectl', 'rollout', 'restart', f'deployment/{owner_name}', 
-                '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+    #         result = subprocess.run([
+    #             'kubectl', 'rollout', 'restart', f'deployment/{owner_name}', 
+    #             '--context', self.config.context
+    #         ], capture_output=True, text=True, check=True)
             
-            print(f"✅ Rollout restart executado para deployment {owner_name}")
-            return True, command
+    #         print(f"✅ Rollout restart executado para deployment {owner_name}")
+    #         return True, command
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro: {e}")
-            # Fallback para delete pod
-            return self.delete_pod(target)
+    #     except subprocess.CalledProcessError as e:
+    #         print(f"❌ Erro: {e}")
+    #         # Fallback para delete pod
+    #         return self.delete_pod(target)
     
     def corrupt_pod_filesystem(self, target: str) -> Tuple[bool, str]:
         """

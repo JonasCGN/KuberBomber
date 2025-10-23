@@ -25,7 +25,7 @@ def main():
         print("🔧 Verificando estrutura do framework...")
         
         # Debug das importações
-        framework_path = os.path.join(os.path.dirname(__file__), 'reliability_framework')
+        framework_path = os.path.join(os.path.dirname(__file__), 'kuber_bomber')
         if not os.path.exists(framework_path):
             print(f"❌ Diretório não encontrado: {framework_path}")
             return

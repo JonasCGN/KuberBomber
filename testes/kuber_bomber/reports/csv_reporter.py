@@ -405,6 +405,115 @@ class CSVReporter:
         """
         return self.current_file if self._is_realtime_active else None
     
+    def save_availability_results(self, results: List[Dict], simulation_stats: Dict, output_dir: Optional[str] = None) -> str:
+        """
+        ⭐ SALVA RESULTADOS DE SIMULAÇÃO DE DISPONIBILIDADE ⭐
+        
+        Salva resultados de simulação de disponibilidade com estatísticas detalhadas.
+        
+        Args:
+            results: Lista de eventos de falha simulados
+            simulation_stats: Estatísticas da simulação
+            output_dir: Diretório de saída (opcional)
+            
+        Returns:
+            Caminho do arquivo criado
+        """
+        if not results:
+            print("⚠️ Nenhum resultado para salvar")
+            return ""
+        
+        now = datetime.now()
+        timestamp = now.strftime('%Y%m%d_%H%M%S')
+        
+        # Usar diretório padrão se não especificado
+        if output_dir is None:
+            output_dir = self._create_full_directory("availability_simulation", "mttf_based")
+        
+        # Criar arquivo principal de resultados
+        results_file = os.path.join(output_dir, f"availability_simulation_{timestamp}.csv")
+        
+        # Campos do arquivo de resultados
+        fieldnames = [
+            'event_time_hours', 'real_time_seconds', 'component_type', 'component_name',
+            'failure_type', 'recovery_time_seconds', 'system_available', 'available_pods',
+            'required_pods', 'availability_percentage', 'downtime_duration', 'cumulative_downtime'
+        ]
+        
+        try:
+            with open(results_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for result in results:
+                    writer.writerow(result)
+            
+            # Criar arquivo de estatísticas
+            stats_file = os.path.join(output_dir, f"simulation_stats_{timestamp}.csv")
+            
+            stats_fieldnames = [
+                'metric', 'value', 'unit', 'description'
+            ]
+            
+            with open(stats_file, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=stats_fieldnames)
+                writer.writeheader()
+                
+                # Escrever estatísticas principais
+                stats_rows = [
+                    {
+                        'metric': 'simulation_duration_hours',
+                        'value': simulation_stats.get('total_simulation_time', 0),
+                        'unit': 'hours',
+                        'description': 'Duração total da simulação'
+                    },
+                    {
+                        'metric': 'total_failures',
+                        'value': simulation_stats.get('total_failures', 0),
+                        'unit': 'count',
+                        'description': 'Total de falhas simuladas'
+                    },
+                    {
+                        'metric': 'system_availability',
+                        'value': simulation_stats.get('system_availability', 0),
+                        'unit': 'percentage',
+                        'description': 'Disponibilidade geral do sistema'
+                    },
+                    {
+                        'metric': 'mean_recovery_time',
+                        'value': simulation_stats.get('mean_recovery_time', 0),
+                        'unit': 'seconds',
+                        'description': 'Tempo médio de recuperação'
+                    },
+                    {
+                        'metric': 'total_downtime',
+                        'value': simulation_stats.get('total_downtime', 0),
+                        'unit': 'hours',
+                        'description': 'Tempo total de indisponibilidade'
+                    },
+                    {
+                        'metric': 'iterations_executed',
+                        'value': simulation_stats.get('iterations', 1),
+                        'unit': 'count',
+                        'description': 'Número de iterações executadas'
+                    }
+                ]
+                
+                for row in stats_rows:
+                    writer.writerow(row)
+            
+            print(f"✅ 📊 Resultados de disponibilidade salvos:")
+            print(f"   📁 Eventos: {results_file}")
+            print(f"   📈 Estatísticas: {stats_file}")
+            print(f"   🎯 {len(results)} eventos registrados")
+            print(f"   📊 Disponibilidade: {simulation_stats.get('system_availability', 0):.2f}%")
+            
+            return results_file
+            
+        except Exception as e:
+            print(f"❌ Erro ao salvar resultados de disponibilidade: {e}")
+            return ""
+    
     def load_test_results(self, filepath: str) -> List[Dict]:
         """
         Carrega resultados de teste de um arquivo CSV.

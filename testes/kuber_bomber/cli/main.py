@@ -75,7 +75,8 @@ Tipos de timeout disponíveis:
     parser.add_argument('--failure-method',
                        choices=[
                            # Pod failures
-                           'kill_processes', 'kill_init', 'delete_pod',
+                        #    'kill_processes', 'kill_init', 'delete_pod',
+                           'kill_processes', 'kill_init',
                            # Worker Node failures  
                            'kill_worker_node_processes', 'restart_worker_node', 'kill_kubelet',
                            # Control Plane failures
@@ -118,7 +119,8 @@ Tipos de timeout disponíveis:
                        help='MTTF base em horas para distribuição de falhas (default: 1.0h)')
     
     parser.add_argument('--failure-modes', nargs='+', 
-                       choices=['kill_processes', 'kill_init', 'delete_pod'],
+                    #    choices=['kill_processes', 'kill_init', 'delete_pod'],
+                       choices=['kill_processes', 'kill_init'],
                        help='Métodos de falha para simulação acelerada')
     
     # ======= NOVAS FLAGS PARA TIMEOUT E CONFIGURAÇÃO =======
@@ -261,7 +263,8 @@ def main():
         
         # Selecionar método de falha baseado no componente
         if component == 'pod':
-            methods = ['kill_processes', 'kill_init', 'delete_pod']
+            # methods = ['kill_processes', 'kill_init', 'delete_pod']
+            methods = ['kill_processes', 'kill_init']
         elif component == 'worker_node':
             methods = ['kill_worker_node_processes']
         else:  # control_plane

@@ -318,3 +318,84 @@ class HealthChecker:
                 'total': len(lb_results)
             }
         }
+    
+    def get_pods_by_app_label(self, app_name: str) -> list:
+        """
+        Obtém pods filtrados pelo label app.
+        
+        Args:
+            app_name: Nome da aplicação (ex: 'foo', 'bar', 'test')
+            
+        Returns:
+            Lista de pods com informações básicas
+        """
+        try:
+            result = subprocess.run([
+                'kubectl', 'get', 'pods', 
+                '-l', f'app={app_name}',
+                '-o', 'json',
+                '--context', self.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            import json
+            data = json.loads(result.stdout)
+            
+            pods = []
+            for item in data.get('items', []):
+                pod_info = {
+                    'name': item['metadata']['name'],
+                    'ready': False,
+                    'status': item['status'].get('phase', 'Unknown'),
+                    'restarts': 0
+                }
+                
+                # Verificar se está Ready
+                conditions = item['status'].get('conditions', [])
+                for condition in conditions:
+                    if condition['type'] == 'Ready':
+                        pod_info['ready'] = condition['status'] == 'True'
+                        break
+                
+                # Contar restarts
+                container_statuses = item['status'].get('containerStatuses', [])
+                if container_statuses:
+                    pod_info['restarts'] = container_statuses[0].get('restartCount', 0)
+                
+                pods.append(pod_info)
+            
+            return pods
+            
+        except Exception as e:
+            print(f"❌ Erro ao obter pods por label app={app_name}: {e}")
+            return []
+    
+    def is_node_ready(self, node_name: str) -> bool:
+        """
+        Verifica se um node está Ready.
+        
+        Args:
+            node_name: Nome do node
+            
+        Returns:
+            True se node está Ready
+        """
+        try:
+            result = subprocess.run([
+                'kubectl', 'get', 'node', node_name,
+                '-o', 'json',
+                '--context', self.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            import json
+            data = json.loads(result.stdout)
+            
+            conditions = data['status'].get('conditions', [])
+            for condition in conditions:
+                if condition['type'] == 'Ready':
+                    return condition['status'] == 'True'
+            
+            return False
+            
+        except Exception as e:
+            print(f"❌ Erro ao verificar node {node_name}: {e}")
+            return False

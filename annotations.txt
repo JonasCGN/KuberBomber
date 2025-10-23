@@ -101,7 +101,8 @@ Coisas para fazer agora:
 - Executar esse processo N vezes
 
 - Trabalhar com tempo de redução(2880h -> 5minutos, 34000x menor), toda vez que o componente se recupera, ele espera 1min(delay)
-    e depois falha o proximo  dependendo do tempo de recuperacao
+    e depois falha o proximo  dependendo do tempo de recuperacao(Ignorar isso, indendente do tempo de recuperacao, sera 1min e 
+    computo o deerminado tempo que deveria ser...)
 
 - Tempo que espera nao importa sera 1min e computo 8...
 - Tempo que espera nao importa sera 1min e computo 300...
