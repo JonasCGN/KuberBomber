@@ -6,7 +6,7 @@ Módulo para injeção de falhas em nós do Kubernetes (worker nodes e control p
 """
 
 import subprocess
-from typing import Tuple
+from typing import Tuple, Optional
 from ..utils.config import get_config
 
 
@@ -48,7 +48,7 @@ class NodeFailureInjector:
             print(f"❌ Erro: {e}")
             return False, command
     
-    def kill_control_plane_processes(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
+    def kill_control_plane_processes(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata todos os processos do control plane (via docker restart em Kind).
         
@@ -58,6 +58,13 @@ class NodeFailureInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
+        if target is None:
+            from kuber_bomber.monitoring.system_monitor import SystemMonitor
+            monitor = SystemMonitor()
+            target = monitor.get_control_plane_node()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
         command = f"docker restart {target}"
         print(f"💀 Executando: {command}")
         print(f"🎛️ Matando todos os processos do control plane {target}...")

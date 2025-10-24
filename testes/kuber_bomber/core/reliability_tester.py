@@ -75,7 +75,7 @@ class ReliabilityTester:
             # === POD FAILURES ===
             'kill_processes': self.pod_injector.kill_all_processes,
             'kill_init': self.pod_injector.kill_init_process,
-            'delete_pod': self.pod_injector.delete_pod,
+            # 'delete_pod': self.pod_injector.delete_pod,
             
             # === WORKER NODE FAILURES ===
             'kill_worker_node_processes': self.node_injector.kill_worker_node_processes,
@@ -94,12 +94,12 @@ class ReliabilityTester:
             'restart_containerd': self.control_plane_injector.restart_containerd
         }
     
-    def initial_system_check(self) -> Tuple[int, Dict]:
+    def initial_system_check(self) -> Tuple[int, Dict, List[str]]:
         """
         Verificação inicial completa do sistema.
         
         Returns:
-            Tuple com (número de apps saudáveis, status detalhado)
+            Tuple com (número de apps saudáveis, status detalhado, aplicações descobertas)
         """
         print("1️⃣ === VERIFICAÇÃO INICIAL DO SISTEMA ===")
         
@@ -112,21 +112,25 @@ class ReliabilityTester:
         # Verificar saúde das aplicações
         print("🔍 Verificando saúde das aplicações via HTTP...")
         health_status = self.health_checker.check_all_applications(verbose=True)
-        healthy_count = sum(1 for status in health_status.values() if status['status'] == 'healthy')
+        healthy_count = sum(1 for status in health_status.values() if status.get('healthy', False))
         
-        if self.config.services:
-            total_services = len(self.config.services)
+        # Extrair nomes das aplicações descobertas
+        discovered_apps = list(health_status.keys()) if health_status else []
+        
+        if health_status:
+            total_services = len(health_status)
             print(f"\n📊 === RESULTADO DA VERIFICAÇÃO ===")
             print(f"✅ Aplicações saudáveis: {healthy_count}/{total_services}")
             
             for service, status in health_status.items():
-                emoji = "✅" if status['status'] == 'healthy' else "❌"
-                print(f"   {emoji} {service}: {status['status']}")
+                emoji = "✅" if status.get('healthy', False) else "❌"
+                health_msg = "saudável" if status.get('healthy', False) else "indisponível"
+                print(f"   {emoji} {service}: {health_msg}")
                 if 'error' in status:
                     print(f"      🔍 Detalhes: {status['error']}")
         
         print("="*50)
-        return healthy_count, health_status
+        return healthy_count, health_status, discovered_apps
     
     def run_reliability_test(self, component_type: str, failure_method: str, 
                            target: Optional[str] = None, iterations: int = 30, 
@@ -176,7 +180,10 @@ class ReliabilityTester:
             print("⚠️ Erro ao iniciar CSV em tempo real, continuando sem ele")
         
         # Verificação inicial completa do sistema
-        healthy_count, initial_health = self.initial_system_check()
+        healthy_count, initial_health, discovered_apps = self.initial_system_check()
+        
+        # Armazenar as aplicações descobertas para uso posterior
+        self.discovered_apps = discovered_apps
         
         if healthy_count == 0:
             if not self._handle_unhealthy_system():
@@ -294,11 +301,11 @@ class ReliabilityTester:
         """Executa uma iteração individual de teste."""
         # Verificar estado inicial
         initial_health = self.health_checker.check_all_applications(verbose=True)
-        healthy_before = sum(1 for status in initial_health.values() if status['status'] == 'healthy')
+        healthy_before = sum(1 for status in initial_health.values() if status.get('healthy', False))
         
         if healthy_before == 0:
             print("⚠️ Nenhuma aplicação saudável antes do teste, aguardando recuperação...")
-            recovered, _ = self.health_checker.wait_for_recovery()  # Usar timeout da configuração
+            recovered, _ = self.health_checker.wait_for_recovery(discovered_apps=getattr(self, 'discovered_apps', None))
             if not recovered:
                 print("❌ Sistema não se recuperou, parando teste")
                 return None
@@ -315,7 +322,7 @@ class ReliabilityTester:
         
         # Aguardar recuperação usando timeout configurado globalmente
         print(f"⏳ Aguardando recuperação (timeout: {self.config.current_recovery_timeout}s)...")
-        recovered, recovery_time = self.health_checker.wait_for_recovery()
+        recovered, recovery_time = self.health_checker.wait_for_recovery(discovered_apps=getattr(self, 'discovered_apps', None))
         
         # Calcular MTTR
         total_time = time.time() - failure_start

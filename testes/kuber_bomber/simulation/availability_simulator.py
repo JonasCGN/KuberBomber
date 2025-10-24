@@ -10,6 +10,9 @@ import time
 import heapq
 import random
 import numpy as np
+import subprocess
+import json
+import requests
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -88,6 +91,7 @@ class AvailabilitySimulator:
     - Tempo entre falhas: 1min real fixo
     - Recuperação: tempo real do Kubernetes
     - Monitoramento contínuo de disponibilidade
+    - Descoberta automática de componentes
     """
     
     def __init__(self, components: Optional[List[Component]] = None, min_pods_required: int = 2):
@@ -100,39 +104,44 @@ class AvailabilitySimulator:
         """
         self.min_pods_required = min_pods_required
         
-        # Critérios de disponibilidade por aplicação (configurado pelo CLI)
-        self.availability_criteria = {
-            "foo-app": 1,
-            "bar-app": 1, 
-            "test-app": 1
-        }
+        # Monitor de saúde (inicializar primeiro para descoberta)
+        self.health_checker = HealthChecker()
+        
+        # Descobrir URLs dos serviços automaticamente
+        discovered_urls = self._discover_services_urls()
+        
+        # Atualizar configuração de serviços com URLs descobertas
+        if discovered_urls:
+            self.health_checker.config.services = self.health_checker.config.services or {}
+            for service_name, urls in discovered_urls.items():
+                # Mapear nome do serviço para nome da app (remover sufixos comuns)
+                app_name = service_name.replace('-service', '').replace('-svc', '')
+                
+                self.health_checker.config.services[app_name] = {
+                    'loadbalancer_url': urls.get('loadbalancer_url', ''),
+                    'nodeport_url': urls.get('nodeport_url', ''),
+                    'ingress_url': urls.get('ingress_url', ''),
+                    'port': urls.get('port', 80),
+                    'endpoint': urls.get('endpoint', f'/{app_name}')
+                }
+        
+        # Critérios de disponibilidade por aplicação (será configurado dinamicamente)
+        self.availability_criteria = {}
         
         # ========== CONFIGURAÇÃO DE COMPONENTES ==========
-        # VOCÊ PODE ALTERAR OS MTTFs AQUI
         if components:
             self.components = components
         else:
-            self.components = [
-                # Pods
-                Component("foo-app", "pod", mttf_hours=100.0),
-                Component("bar-app", "pod", mttf_hours=120.0),
-                Component("test-app", "pod", mttf_hours=80.0),
-                
-                # Worker Nodes
-                Component("local-k8s-worker", "node", mttf_hours=500.0),
-                Component("local-k8s-worker2", "node", mttf_hours=500.0),
-                
-                # Control Plane
-                Component("local-k8s-control-plane", "control_plane", mttf_hours=800.0),
-            ]
+            # Descoberta automática de componentes
+            self.components = self._discover_components()
+        
+        # Configurar critérios de disponibilidade baseado nos componentes descobertos
+        self._setup_default_availability_criteria()
         
         # Injetores de falha
         self.pod_injector = PodFailureInjector()
         self.node_injector = NodeFailureInjector()
         self.control_plane_injector = ControlPlaneInjector()
-        
-        # Monitor de saúde
-        self.health_checker = HealthChecker()
         
         # Reporter CSV
         self.csv_reporter = CSVReporter()
@@ -145,6 +154,390 @@ class AvailabilitySimulator:
         
         # Configurações
         self.real_delay_between_failures = 60  # 1 minuto em segundos
+    
+    def _discover_components(self) -> List[Component]:
+        """
+        Descobre automaticamente componentes do cluster Kubernetes.
+        
+        Returns:
+            Lista de componentes descobertos
+        """
+        discovered_components = []
+        
+        print("🔍 === DESCOBRINDO COMPONENTES DO CLUSTER ===")
+        
+        # Descobrir aplicações (pods)
+        try:
+            # Obter todos os deployments
+            result = subprocess.run([
+                'kubectl', 'get', 'deployments', '-o', 'json',
+                '--context', self.health_checker.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            deployments_data = json.loads(result.stdout)
+            
+            for deployment in deployments_data.get('items', []):
+                name = deployment['metadata']['name']
+                app_label = deployment['spec']['selector']['matchLabels'].get('app', name)
+                
+                # MTTF padrão baseado no tipo de aplicação
+                default_mttf = 100.0  # horas
+                
+                component = Component(f"{app_label}-app", "pod", mttf_hours=default_mttf)
+                discovered_components.append(component)
+                print(f"  📦 Pod descoberto: {app_label}-app (MTTF: {default_mttf}h)")
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir pods: {e}")
+            print("  ℹ️ Nenhuma aplicação foi descoberta automaticamente")
+        
+        # Descobrir nodes
+        try:
+            result = subprocess.run([
+                'kubectl', 'get', 'nodes', '-o', 'json',
+                '--context', self.health_checker.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            nodes_data = json.loads(result.stdout)
+            
+            for node in nodes_data.get('items', []):
+                node_name = node['metadata']['name']
+                
+                # Determinar tipo do node baseado nos labels
+                labels = node['metadata'].get('labels', {})
+                taints = node['spec'].get('taints', [])
+                
+                # Verificar se é control plane (múltiplos critérios)
+                is_control_plane = False
+                
+                # Labels para control plane
+                control_plane_labels = [
+                    'node-role.kubernetes.io/control-plane',
+                    'node-role.kubernetes.io/master',
+                    'kubernetes.io/role=master'
+                ]
+                
+                for label in control_plane_labels:
+                    if label in labels:
+                        is_control_plane = True
+                        break
+                
+                # Verificar por taints típicos de control plane
+                if not is_control_plane:
+                    for taint in taints:
+                        taint_key = taint.get('key', '')
+                        if 'master' in taint_key or 'control-plane' in taint_key:
+                            is_control_plane = True
+                            break
+                
+                # Verificar por hostname/nome (fallback)
+                if not is_control_plane:
+                    control_plane_names = ['master', 'control-plane', 'controlplane']
+                    for cp_name in control_plane_names:
+                        if cp_name in node_name.lower():
+                            is_control_plane = True
+                            break
+                
+                if is_control_plane:
+                    component_type = "control_plane"
+                    default_mttf = 800.0  # Control plane mais confiável (33+ dias)
+                    print(f"  🎛️ Control Plane descoberto: {node_name} (MTTF: {default_mttf}h)")
+                else:
+                    component_type = "node"
+                    default_mttf = 500.0  # Worker nodes (20+ dias)
+                    print(f"  🖥️ Worker Node descoberto: {node_name} (MTTF: {default_mttf}h)")
+                
+                component = Component(node_name, component_type, mttf_hours=default_mttf)
+                discovered_components.append(component)
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir nodes: {e}")
+            # Fallback para nodes conhecidos se houver erro
+            print("  ℹ️ Tentando fallback para nodes conhecidos...")
+            
+            # Exemplo de fallback mínimo (sem hardcode específico):
+            fallback_components = [
+                # Se nenhum componente for descoberto, este fallback deve ser vazio
+                # para forçar o usuário a verificar seu cluster
+            ]
+            
+            # Se não conseguiu descobrir nada, alertar o usuário
+            print("❌ Nenhum componente descoberto no cluster!")
+            print("   Verifique se o cluster está rodando e acessível:")
+            print("   kubectl get nodes")
+            print("   kubectl get deployments")
+            return []
+        
+        print(f"✅ Total de {len(discovered_components)} componentes descobertos")
+        print()
+        
+        # Mostrar resumo por tipo
+        pods = [c for c in discovered_components if c.component_type == "pod"]
+        workers = [c for c in discovered_components if c.component_type == "node"]  
+        control_planes = [c for c in discovered_components if c.component_type == "control_plane"]
+        
+        print("📊 === RESUMO DA DESCOBERTA ===")
+        print(f"  📦 Aplicações (Pods): {len(pods)} componentes")
+        for pod in pods:
+            print(f"    • {pod.name}: MTTF {pod.mttf_hours}h (~{pod.mttf_hours/24:.1f} dias)")
+        
+        print(f"  🖥️ Worker Nodes: {len(workers)} componentes")
+        for worker in workers:
+            print(f"    • {worker.name}: MTTF {worker.mttf_hours}h (~{worker.mttf_hours/24:.1f} dias)")
+        
+        print(f"  🎛️ Control Planes: {len(control_planes)} componentes")
+        for cp in control_planes:
+            print(f"    • {cp.name}: MTTF {cp.mttf_hours}h (~{cp.mttf_hours/24:.1f} dias)")
+        
+        print()
+        
+        return discovered_components
+    
+    def _discover_services_urls(self) -> Dict[str, Dict[str, str]]:
+        """
+        Descobre automaticamente URLs dos serviços (LoadBalancer, NodePort, Ingress).
+        
+        Returns:
+            Dicionário com URLs descobertas para cada serviço
+        """
+        discovered_urls = {}
+        
+        print("🌐 === DESCOBRINDO URLs DOS SERVIÇOS ===")
+        
+        try:
+            # Descobrir serviços LoadBalancer
+            result = subprocess.run([
+                'kubectl', 'get', 'services', '-o', 'json',
+                '--context', self.health_checker.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            services_data = json.loads(result.stdout)
+            
+            for service in services_data.get('items', []):
+                service_name = service['metadata']['name']
+                service_type = service['spec'].get('type', 'ClusterIP')
+                
+                # Pular serviços do sistema
+                if service_name in ['kubernetes', 'kube-dns']:
+                    continue
+                
+                service_urls = {}
+                
+                if service_type == 'LoadBalancer':
+                    # LoadBalancer com IP externo
+                    ingress = service['status'].get('loadBalancer', {}).get('ingress', [])
+                    if ingress:
+                        external_ip = ingress[0].get('ip')
+                        if external_ip:
+                            ports = service['spec'].get('ports', [])
+                            for port in ports:
+                                port_num = port.get('port', 80)
+                                target_port = port.get('targetPort', port_num)
+                                
+                                # Detectar endpoint baseado no nome do serviço
+                                # Remover sufixos comuns para descobrir o endpoint real
+                                base_name = service_name.replace('-loadbalancer', '').replace('-service', '').replace('-svc', '')
+                                endpoint = f"/{base_name}"
+                                
+                                if port_num == 80:
+                                    url = f"http://{external_ip}{endpoint}"
+                                else:
+                                    url = f"http://{external_ip}:{port_num}{endpoint}"
+                                
+                                service_urls['loadbalancer_url'] = url
+                                service_urls['port'] = target_port
+                                service_urls['endpoint'] = endpoint
+                                break
+                
+                elif service_type == 'NodePort':
+                    # NodePort - pegar IP de qualquer node
+                    node_result = subprocess.run([
+                        'kubectl', 'get', 'nodes', '-o', 'json',
+                        '--context', self.health_checker.config.context
+                    ], capture_output=True, text=True, check=True)
+                    
+                    nodes_data = json.loads(node_result.stdout)
+                    
+                    # Pegar IP do primeiro node disponível
+                    node_ip = None
+                    for node in nodes_data.get('items', []):
+                        addresses = node['status'].get('addresses', [])
+                        for addr in addresses:
+                            if addr['type'] in ['InternalIP', 'ExternalIP']:
+                                node_ip = addr['address']
+                                break
+                        if node_ip:
+                            break
+                    
+                    if node_ip:
+                        ports = service['spec'].get('ports', [])
+                        for port in ports:
+                            node_port = port.get('nodePort')
+                            target_port = port.get('targetPort', port.get('port', 80))
+                            
+                            if node_port:
+                                base_name = service_name.replace('-loadbalancer', '').replace('-service', '').replace('-svc', '')
+                                endpoint = f"/{base_name}"
+                                url = f"http://{node_ip}:{node_port}{endpoint}"
+                                
+                                service_urls['nodeport_url'] = url
+                                service_urls['port'] = target_port
+                                service_urls['endpoint'] = endpoint
+                                break
+                
+                if service_urls:
+                    discovered_urls[service_name] = service_urls
+                    url_type = 'LoadBalancer' if 'loadbalancer_url' in service_urls else 'NodePort'
+                    main_url = service_urls.get('loadbalancer_url') or service_urls.get('nodeport_url')
+                    print(f"  🌐 {service_name} ({url_type}): {main_url}")
+            
+            # Tentar descobrir Ingress também
+            try:
+                ingress_result = subprocess.run([
+                    'kubectl', 'get', 'ingress', '-o', 'json',
+                    '--context', self.health_checker.config.context
+                ], capture_output=True, text=True, check=True)
+                
+                ingress_data = json.loads(ingress_result.stdout)
+                
+                for ingress in ingress_data.get('items', []):
+                    ingress_name = ingress['metadata']['name']
+                    
+                    # Pegar IP do ingress
+                    ingress_ip = None
+                    status = ingress.get('status', {})
+                    load_balancer = status.get('loadBalancer', {})
+                    ingress_list = load_balancer.get('ingress', [])
+                    
+                    if ingress_list:
+                        ingress_ip = ingress_list[0].get('ip')
+                    
+                    if ingress_ip:
+                        rules = ingress['spec'].get('rules', [])
+                        for rule in rules:
+                            paths = rule.get('http', {}).get('paths', [])
+                            for path in paths:
+                                path_str = path.get('path', '/')
+                                backend = path.get('backend', {})
+                                service_name = backend.get('service', {}).get('name') or backend.get('serviceName')
+                                
+                                if service_name and service_name in discovered_urls:
+                                    ingress_url = f"http://{ingress_ip}{path_str}"
+                                    discovered_urls[service_name]['ingress_url'] = ingress_url
+                                    print(f"  🔗 {service_name} (Ingress): {ingress_url}")
+                                    
+            except subprocess.CalledProcessError:
+                print("  ℹ️ Nenhum Ingress encontrado ou erro ao consultar")
+        
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir URLs dos serviços: {e}")
+        
+        print(f"✅ URLs descobertas para {len(discovered_urls)} serviços")
+        print()
+        
+        return discovered_urls
+    
+    def _setup_default_availability_criteria(self):
+        """
+        Configura critérios de disponibilidade padrão baseado nos componentes descobertos.
+        """
+        # Para cada aplicação (pod), exigir pelo menos 1 instância
+        for component in self.components:
+            if component.component_type == "pod":
+                app_name = component.name  # já está no formato "app-name"
+                self.availability_criteria[app_name] = 1
+                print(f"📋 Critério padrão: {app_name} ≥ 1 pod(s)")
+        
+        if self.availability_criteria:
+            print(f"✅ {len(self.availability_criteria)} critérios de disponibilidade configurados")
+        else:
+            print("⚠️ Nenhum critério de disponibilidade configurado")
+        print()
+    
+    def configure_component_mttfs(self, custom_mttfs: Optional[Dict[str, float]] = None):
+        """
+        Configura MTTFs personalizados para componentes específicos.
+        
+        Args:
+            custom_mttfs: Dicionário com {nome_componente: mttf_horas}
+        """
+        if not custom_mttfs:
+            return
+        
+        print("🔧 === CONFIGURANDO MTTFs PERSONALIZADOS ===")
+        
+        for component in self.components:
+            if component.name in custom_mttfs:
+                old_mttf = component.mttf_hours
+                component.mttf_hours = custom_mttfs[component.name]
+                print(f"  📊 {component.name}: {old_mttf}h ➜ {component.mttf_hours}h")
+        
+        print("✅ MTTFs personalizados aplicados")
+        print()
+    
+    def get_discovered_components_info(self) -> Dict:
+        """
+        Retorna informações sobre os componentes descobertos.
+        
+        Returns:
+            Dicionário com informações dos componentes
+        """
+        return {
+            'total_components': len(self.components),
+            'pods': [c for c in self.components if c.component_type == "pod"],
+            'nodes': [c for c in self.components if c.component_type == "node"], 
+            'control_planes': [c for c in self.components if c.component_type == "control_plane"],
+            'availability_criteria': self.availability_criteria,
+            'discovered_services': getattr(self.health_checker.config, 'services', {})
+        }
+    
+    def get_mttf_standards(self) -> Dict[str, Dict]:
+        """
+        Retorna os padrões de MTTF usados na descoberta automática.
+        
+        Returns:
+            Dicionário com padrões de MTTF por tipo de componente
+        """
+        return {
+            'pod': {
+                'mttf_hours': 100.0,
+                'mttf_days': 4.2,
+                'description': 'Aplicações em pods - reinicialização automática'
+            },
+            'node': {
+                'mttf_hours': 500.0,
+                'mttf_days': 20.8,
+                'description': 'Worker nodes - falhas de hardware/SO'
+            },
+            'control_plane': {
+                'mttf_hours': 800.0,
+                'mttf_days': 33.3,
+                'description': 'Control plane - componentes críticos'
+            }
+        }
+    
+    def print_mttf_info(self):
+        """Imprime informações detalhadas sobre os MTTFs configurados."""
+        standards = self.get_mttf_standards()
+        
+        print("📈 === PADRÕES DE MTTF (MEAN TIME TO FAILURE) ===")
+        print()
+        
+        for comp_type, info in standards.items():
+            type_display = {
+                'pod': '📦 Aplicações (Pods)',
+                'node': '🖥️ Worker Nodes', 
+                'control_plane': '🎛️ Control Planes'
+            }[comp_type]
+            
+            print(f"{type_display}:")
+            print(f"  • MTTF: {info['mttf_hours']}h (~{info['mttf_days']:.1f} dias)")
+            print(f"  • Descrição: {info['description']}")
+            print()
+        
+        print("💡 Estes valores podem ser personalizados usando configure_component_mttfs()")
+        print("📊 MTTFs baseados em padrões industriais para infraestrutura cloud")
+        print()
         
     def setup_availability_criteria(self):
         """Pergunta ao usuário quantos pods precisam estar disponíveis."""
@@ -342,7 +735,7 @@ class AvailabilitySimulator:
     
     def wait_for_recovery(self, component: Component) -> float:
         """
-        Aguarda recuperação real do componente.
+        Aguarda recuperação real do componente verificando requisições HTTP.
         
         Args:
             component: Componente a aguardar recuperação
@@ -353,25 +746,31 @@ class AvailabilitySimulator:
         print(f"⏳ Aguardando recuperação de {component.name}...")
         
         start_time = time.time()
-        max_recovery_time = 300  # 5 minutos máximo
-        check_interval = 5  # verificar a cada 5 segundos
+        check_interval = 2  # verificar a cada 2 segundos
         
-        while time.time() - start_time < max_recovery_time:
+        while True:  # Aguarda indefinidamente até recuperar
             try:
                 if component.component_type == "pod":
-                    # Verificar se pod está Ready
-                    pods = self.health_checker.get_pods_by_app_label(component.name.replace("-app", ""))
-                    if pods and pods[0]['ready']:
+                    # CORREÇÃO: Usar descoberta dinâmica diretamente
+                    app_name = component.name  # Manter nome completo (ex: bar-app)
+                    
+                    # Usar health_checker com descoberta dinâmica
+                    health_result = self.health_checker.check_application_health(app_name, verbose=False)
+                    
+                    if health_result.get('healthy', False):
                         recovery_time = time.time() - start_time
-                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s")
+                        url_info = health_result.get('url_type', 'health check')
+                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s ({url_info})")
                         component.current_status = 'healthy'
                         return recovery_time
+                    
+                    # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
                         
                 elif component.component_type in ["node", "control_plane"]:
-                    # Verificar se node está Ready
+                    # Para nodes, verificar se está Ready no Kubernetes
                     if self.health_checker.is_node_ready(component.name):
                         recovery_time = time.time() - start_time
-                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s")
+                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (node Ready)")
                         component.current_status = 'healthy'
                         return recovery_time
                 
@@ -380,12 +779,6 @@ class AvailabilitySimulator:
             except Exception as e:
                 print(f"  ⚠️ Erro verificando recuperação: {e}")
                 time.sleep(check_interval)
-        
-        # Timeout - assumir recuperado
-        recovery_time = time.time() - start_time
-        print(f"  ⏰ Timeout: assumindo {component.name} recuperado após {recovery_time:.1f}s")
-        component.current_status = 'healthy'
-        return recovery_time
     
     def check_system_availability(self) -> bool:
         """

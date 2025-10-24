@@ -148,7 +148,7 @@ class SystemMonitor:
             print(f"❌ Erro ao descrever pod {pod_name}: {e}")
             return ""
     
-    def get_control_plane_node(self) -> str:
+    def get_control_plane_node(self) -> Optional[str]:
         """
         Obtém o nome do nó control plane.
         
@@ -156,17 +156,45 @@ class SystemMonitor:
             Nome do nó control plane ou string padrão
         """
         try:
+            # Tentar obter control plane automaticamente
             result = subprocess.run([
                 'kubectl', 'get', 'nodes', '-l', 'node-role.kubernetes.io/control-plane',
                 '-o', 'jsonpath={.items[0].metadata.name}', '--context', self.config.context
             ], capture_output=True, text=True, check=True)
             
             control_plane = result.stdout.strip()
-            return control_plane if control_plane else "local-k8s-control-plane"
+            if control_plane:
+                return control_plane
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro ao obter control plane: {e}")
-            return "local-k8s-control-plane"  # Fallback para Kind
+            # Fallback: tentar master label
+            result = subprocess.run([
+                'kubectl', 'get', 'nodes', '-l', 'node-role.kubernetes.io/master',
+                '-o', 'jsonpath={.items[0].metadata.name}', '--context', self.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            control_plane = result.stdout.strip()
+            if control_plane:
+                return control_plane
+            
+            # Fallback: procurar por qualquer node com control-plane no nome
+            result = subprocess.run([
+                'kubectl', 'get', 'nodes', '-o', 'json', '--context', self.config.context
+            ], capture_output=True, text=True, check=True)
+            
+            import json
+            nodes_data = json.loads(result.stdout)
+            
+            for node in nodes_data.get('items', []):
+                node_name = node['metadata']['name']
+                if any(term in node_name.lower() for term in ['control-plane', 'master', 'controlplane']):
+                    return node_name
+            
+            # Se chegou até aqui, não conseguiu descobrir automaticamente
+            raise Exception("Nenhum control plane descoberto automaticamente")
+            
+        except Exception as e:
+            print(f"❌ Erro ao descobrir control plane automaticamente: {e}")
+            return None  # Retornar None em vez de hardcode
     
     def check_cluster_health(self) -> dict:
         """

@@ -7,6 +7,7 @@ para timeout de recuperação personalizável.
 """
 
 import os
+import subprocess
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -23,7 +24,7 @@ class ReliabilityConfig:
     
     # Configurações de Kubernetes
     namespace: str = "default"
-    context: str = "local-k8s"
+    context: str = ""  # Será detectado automaticamente
     
     # Serviços para monitoramento
     services: Optional[Dict[str, Dict[str, Any]]] = None
@@ -59,32 +60,56 @@ class ReliabilityConfig:
     
     def __post_init__(self):
         """Inicialização pós-criação do objeto."""
+        # Detectar contexto automaticamente se não especificado
+        if not self.context:
+            self.context = self._detect_current_context()
+        
         # Configurar serviços padrão se não especificados
         if self.services is None:
-            # URLs corretas usando LoadBalancer (MetalLB)
-            self.services = {
-                'foo': {
-                    'loadbalancer_url': 'http://172.18.255.201/foo',
-                    'ingress_url': 'http://172.18.255.200/foo',
-                    'port': 8080, 
-                    'endpoint': '/foo'
-                },
-                'bar': {
-                    'loadbalancer_url': 'http://172.18.255.202:81/bar',
-                    'ingress_url': 'http://172.18.255.200/bar',
-                    'port': 8081, 
-                    'endpoint': '/bar'
-                },
-                'test': {
-                    'loadbalancer_url': 'http://172.18.255.203:82/test',
-                    'ingress_url': 'http://172.18.255.200/test',
-                    'port': 8082, 
-                    'endpoint': '/test'
-                }
-            }
+            # Inicializar vazio - URLs serão descobertas automaticamente
+            self.services = {}
         
         # Criar diretório de relatórios se não existir
         os.makedirs(self.reports_dir, exist_ok=True)
+    
+    def _detect_current_context(self) -> str:
+        """
+        Detecta o contexto atual do kubectl automaticamente.
+        
+        Returns:
+            Nome do contexto atual ou fallback
+        """
+        try:
+            result = subprocess.run([
+                'kubectl', 'config', 'current-context'
+            ], capture_output=True, text=True, check=True)
+            
+            current_context = result.stdout.strip()
+            if current_context:
+                print(f"🔍 Contexto detectado automaticamente: {current_context}")
+                return current_context
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao detectar contexto: {e}")
+        
+        # Fallback: tentar contextos conhecidos
+        fallback_contexts = ["kind-local-k8s", "local-k8s", "minikube", "docker-desktop"]
+        
+        for context in fallback_contexts:
+            try:
+                result = subprocess.run([
+                    'kubectl', 'cluster-info', '--context', context
+                ], capture_output=True, text=True, timeout=5)
+                
+                if result.returncode == 0:
+                    print(f"🔍 Usando contexto fallback: {context}")
+                    return context
+                    
+            except Exception:
+                continue
+        
+        print("⚠️ Nenhum contexto válido encontrado - usando padrão 'default'")
+        return "default"
 
 
 class ConfigManager:

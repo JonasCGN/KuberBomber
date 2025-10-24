@@ -26,30 +26,30 @@ run_all_failures:
 	@echo "📊 Parâmetros: 30 iterações, 10 segundos de intervalo"
 	@echo ""
 	@echo "📦 ===== TESTES DE PODS ====="
-	cd testes && python3 reliability_tester.py --component pod --failure-method kill_processes --target bar-app-6f7b574d56-sz6vn --iterations 40 --interval 10
+	cd testes && python3 reliability_tester.py --component pod --failure-method kill_processes --target bar-app-6f7b574d56-82dnd --iterations 5 --interval 10
 	@echo ""
-	cd testes && python3 reliability_tester.py --component pod --failure-method kill_init --target test-app-86f66d945f-vvnpf --iterations 40 --interval 10
-	@echo ""
-	@echo "🖥️  ===== TESTES DE WORKER NODES ====="
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_worker_node_processes --target local-k8s-worker --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_kubelet --target local-k8s-worker2 --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method delete_kube_proxy --target local-k8s-worker --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target local-k8s-worker2 --iterations 40 --interval 10
-	@echo ""
-	@echo "🎛️  ===== TESTES DE CONTROL PLANE ====="
-	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target local-k8s-control-plane --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target local-k8s-control-plane --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_controller_manager --target local-k8s-control-plane --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_scheduler --target local-k8s-control-plane --iterations 40 --interval 10
-	@echo ""
-	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_etcd --target local-k8s-control-plane --iterations 40 --interval 10 --timeout extended
-	@echo ""
+# 	cd testes && python3 reliability_tester.py --component pod --failure-method kill_init --target test-app-86f66d945f-vvnpf --iterations 40 --interval 10
+# 	@echo ""
+# 	@echo "🖥️  ===== TESTES DE WORKER NODES ====="
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_worker_node_processes --target local-k8s-worker --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method kill_kubelet --target local-k8s-worker2 --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method delete_kube_proxy --target local-k8s-worker --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target local-k8s-worker2 --iterations 40 --interval 10
+# 	@echo ""
+# 	@echo "🎛️  ===== TESTES DE CONTROL PLANE ====="
+# 	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target local-k8s-control-plane --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target local-k8s-control-plane --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_controller_manager --target local-k8s-control-plane --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_kube_scheduler --target local-k8s-control-plane --iterations 40 --interval 10
+# 	@echo ""
+# 	cd testes && python3 reliability_tester.py --component control_plane --failure-method kill_etcd --target local-k8s-control-plane --iterations 40 --interval 10 --timeout extended
+# 	@echo ""
 	@echo "✅ Suite completa de testes finalizada!"
 	@echo "📁 Resultados salvos em: testes/2025/10/15/component/"
 
@@ -58,4 +58,4 @@ run_graficos:
 
 run_simulation:
 	. .venv/bin/activate && \
-	cd /home/jonascgn/Documentos/1_Artigo/testes && python -m kuber_bomber.cli.availability_cli --duration 48 --iterations 1
+	cd /home/jonascgn/Documentos/1_Artigo/testes && python -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 1

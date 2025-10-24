@@ -10,6 +10,7 @@ da infraestrutura Kubernetes.
 import argparse
 import sys
 import os
+from typing import List, Optional
 
 # Adicionar path do kuber_bomber
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,9 +18,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kuber_bomber.simulation.availability_simulator import AvailabilitySimulator
 
 
-def get_availability_criteria():
+def get_availability_criteria(discovered_apps: Optional[List[str]] = None):
     """
-    Pergunta ao usuário sobre os critérios de disponibilidade para cada tipo de pod.
+    Pergunta ao usuário sobre os critérios de disponibilidade para cada aplicação descoberta.
+    
+    Args:
+        discovered_apps: Lista de aplicações descobertas automaticamente
     
     Returns:
         Dict com critérios de disponibilidade por aplicação
@@ -31,7 +35,28 @@ def get_availability_criteria():
     print()
     
     criteria = {}
-    pod_apps = ["foo-app", "bar-app", "test-app"]
+    
+    # Usar aplicações descobertas ou fallback
+    if discovered_apps:
+        pod_apps = discovered_apps
+    else:
+        # Fallback: tentar descobrir automaticamente
+        from kuber_bomber.simulation.availability_simulator import AvailabilitySimulator
+        temp_simulator = AvailabilitySimulator()
+        info = temp_simulator.get_discovered_components_info()
+        pod_apps = [pod.name for pod in info['pods']]
+        
+        # Se ainda não descobriu, avisar que não há aplicações
+        if not pod_apps:
+            print("❌ Nenhuma aplicação descoberta no cluster")
+            print("   Verifique se há deployments rodando:")
+            print("   kubectl get deployments")
+            return None
+    
+    print(f"📋 Aplicações descobertas: {len(pod_apps)}")
+    for app in pod_apps:
+        print(f"  • {app}")
+    print()
     
     for app in pod_apps:
         while True:
@@ -61,7 +86,7 @@ def get_availability_criteria():
     confirm = input("✅ Confirmar configuração? (s/N): ").lower().strip()
     if confirm not in ['s', 'sim', 'y', 'yes']:
         print("🔄 Reconfigurando...")
-        return get_availability_criteria()
+        return get_availability_criteria(discovered_apps)  # Passar apps descobertas na recursão
     
     return criteria
 
@@ -160,9 +185,15 @@ O simulador irá:
         print(f"  • Delay entre falhas: {args.delay} segundos REAIS")
         print()
         
-        # Obter critérios de disponibilidade do usuário
-        availability_criteria = get_availability_criteria()
+        # Obter critérios de disponibilidade do usuário usando descoberta dinâmica
+        discovered_apps = [pod.name for pod in simulator.get_discovered_components_info()['pods']]
+        availability_criteria = get_availability_criteria(discovered_apps)
         
+        # Validar se obtivemos critérios válidos
+        if availability_criteria is None:
+            print("❌ Não foi possível obter critérios de disponibilidade")
+            return
+            
         # Atualizar o simulador com os critérios
         simulator.availability_criteria = availability_criteria
         

@@ -10,7 +10,8 @@ import time
 import requests
 import socket
 import subprocess
-from typing import Dict, Tuple, Optional
+import json
+from typing import Dict, Tuple, Optional, List
 from ..utils.config import get_config
 
 
@@ -28,35 +29,67 @@ class HealthChecker:
     
     def check_application_health(self, service: str, verbose: bool = True, use_ingress: bool = False) -> Dict:
         """
-        Verifica se uma aplicação está respondendo usando curl.
+        Verifica a saúde de uma aplicação usando descoberta dinâmica de URLs.
         
         Args:
-            service: Nome do serviço a verificar
+            service: Nome do serviço
             verbose: Se deve imprimir mensagens detalhadas
-            use_ingress: Se deve usar URL do Ingress em vez do LoadBalancer
+            use_ingress: Se deve preferir ingress sobre LoadBalancer
             
         Returns:
-            Dicionário com status da aplicação
+            Dict com status da verificação
         """
-        if not self.config.services or service not in self.config.services:
+        # Primeiro tentar descobrir URLs dinamicamente
+        discovered_urls = self._discover_service_url(service)
+        
+        if not discovered_urls:
             return {
-                'status': 'unknown',
-                'error': f"Serviço '{service}' não configurado"
+                'healthy': False,
+                'error': f'Serviço {service} não descoberto automaticamente',
+                'status_code': None,
+                'response_time': None,
+                'url': None,
+                'url_type': 'Não descoberto'
             }
         
-        service_config = self.config.services[service]
+        # Escolher a melhor URL disponível
+        url = None
+        url_type = None
         
-        # Escolher URL baseado no parâmetro
-        if use_ingress and 'ingress_url' in service_config:
-            url = service_config['ingress_url']
+        if use_ingress and 'ingress_url' in discovered_urls:
+            url = discovered_urls['ingress_url']
             url_type = "Ingress"
-        elif 'loadbalancer_url' in service_config:
-            url = service_config['loadbalancer_url']
+        elif 'loadbalancer_url' in discovered_urls:
+            url = discovered_urls['loadbalancer_url']
             url_type = "LoadBalancer"
+        elif 'nodeport_url' in discovered_urls:
+            url = discovered_urls['nodeport_url']
+            url_type = "NodePort"
         else:
-            # Fallback para port-forward local (compatibilidade com versões antigas)
-            url = f"http://localhost:{service_config['port']}{service_config['endpoint']}"
-            url_type = "Port-forward"
+            # Se chegou aqui, só tem configuração hardcoded no config (fallback legacy)
+            if self.config.services:
+                service_config = self.config.services.get(service, {})
+                if service_config and 'port' in service_config and 'endpoint' in service_config:
+                    url = f"http://localhost:{service_config['port']}{service_config['endpoint']}"
+                    url_type = "Port-forward (legacy)"
+                else:
+                    return {
+                        'healthy': False,
+                        'error': f'Nenhuma URL descoberta para {service}',
+                        'status_code': None,
+                        'response_time': None,
+                        'url': None,
+                        'url_type': 'Não disponível'
+                    }
+            else:
+                return {
+                    'healthy': False,
+                    'error': f'Nenhuma URL descoberta para {service}',
+                    'status_code': None,
+                    'response_time': None,
+                    'url': None,
+                    'url_type': 'Não disponível'
+                }
         
         if verbose:
             print(f"🔍 Testando {service} via {url_type}: {url}")
@@ -76,7 +109,7 @@ class HealthChecker:
                     err = result.stderr.strip() or 'curl failed'
                     print(f"❌ {service}: {err}")
                 return {
-                    'status': 'unreachable',
+                    'healthy': False,
                     'response_time': None,
                     'error': (result.stderr.strip() or 'curl failed'),
                     'url': url,
@@ -96,7 +129,7 @@ class HealthChecker:
                     rt = response_time if response_time is not None else 0.0
                     print(f"✅ {service}: OK (HTTP {status_code}, {rt:.3f}s)")
                 return {
-                    'status': 'healthy',
+                    'healthy': True,
                     'response_time': response_time,
                     'status_code': status_code,
                     'url': url,
@@ -107,7 +140,7 @@ class HealthChecker:
                     rt = response_time if response_time is not None else 0.0
                     print(f"⚠️ {service}: HTTP {status_code} ({rt:.3f}s)")
                 return {
-                    'status': 'unhealthy',
+                    'healthy': False,
                     'response_time': response_time,
                     'status_code': status_code,
                     'error': f"HTTP {status_code}",
@@ -118,28 +151,55 @@ class HealthChecker:
             if verbose:
                 print(f"❌ {service}: {str(e)}")
             return {
-                'status': 'unreachable',
+                'healthy': False,
                 'response_time': None,
                 'error': str(e),
                 'url': url,
                 'url_type': url_type
             }
     
-    def check_all_applications(self, verbose: bool = True, use_ingress: bool = False) -> Dict:
+    def check_all_applications(self, verbose: bool = True, use_ingress: bool = False, discovered_apps: Optional[List[str]] = None) -> Dict:
         """
-        Verifica saúde de todas as aplicações configuradas.
+        Verifica saúde de todas as aplicações configuradas ou descobertas.
         
         Args:
             verbose: Se deve imprimir mensagens detalhadas
             use_ingress: Se deve usar URLs do Ingress em vez do LoadBalancer
+            discovered_apps: Lista de aplicações descobertas dinamicamente
             
         Returns:
             Dicionário com status de todas as aplicações
         """
         results = {}
-        if self.config.services:
+        
+        # Se temos aplicações descobertas, usar elas
+        if discovered_apps:
+            for app in discovered_apps:
+                results[app] = self.check_application_health(app, verbose, use_ingress)
+        # Senão, tentar usar as configuradas (fallback)
+        elif self.config.services:
             for service in self.config.services.keys():
                 results[service] = self.check_application_health(service, verbose, use_ingress)
+        else:
+            # Se não tem nada configurado, descobrir automaticamente
+            try:
+                from kuber_bomber.simulation.availability_simulator import AvailabilitySimulator
+                simulator = AvailabilitySimulator()
+                info = simulator.get_discovered_components_info()
+                discovered_apps = [pod.name for pod in info['pods']]
+                
+                if discovered_apps:
+                    if verbose:
+                        print(f"🔍 Descobertas {len(discovered_apps)} aplicações automaticamente")
+                    for app in discovered_apps:
+                        results[app] = self.check_application_health(app, verbose, use_ingress)
+                else:
+                    if verbose:
+                        print("❌ Nenhuma aplicação descoberta no cluster")
+            except Exception as e:
+                if verbose:
+                    print(f"❌ Erro ao descobrir aplicações: {e}")
+        
         return results
     
     def check_port_forwards(self):
@@ -166,7 +226,7 @@ class HealthChecker:
                 print(f"❌ Porta {port} ({service}): Erro - {e}")
         print()
     
-    def wait_for_recovery(self, timeout: Optional[int] = None) -> Tuple[bool, float]:
+    def wait_for_recovery(self, timeout: Optional[int] = None, discovered_apps: Optional[List[str]] = None) -> Tuple[bool, float]:
         """
         ⭐ AGUARDA RECUPERAÇÃO COM TIMEOUT CONFIGURÁVEL ⭐
         
@@ -211,17 +271,18 @@ class HealthChecker:
             print()  # Linha em branco
             
             # Verificar saúde das aplicações (modo silencioso)
-            health_status = self.check_all_applications(verbose=False)
-            healthy_count = sum(1 for status in health_status.values() if status['status'] == 'healthy')
-            total_services = len(self.config.services) if self.config.services else 0
+            health_status = self.check_all_applications(verbose=False, discovered_apps=discovered_apps)
+            healthy_count = sum(1 for status in health_status.values() if status.get('healthy', False))
+            total_services = len(health_status) if health_status else 0
             
             print(f"🏥 Status das aplicações: {healthy_count}/{total_services} saudáveis")
             for service, status in health_status.items():
-                emoji = "✅" if status['status'] == 'healthy' else "❌"
-                if status['status'] == 'healthy':
-                    print(f"  {emoji} {service}: {status['status']} (tempo: {status['response_time']:.3f}s)")
+                emoji = "✅" if status.get('healthy', False) else "❌"
+                if status.get('healthy', False):
+                    resp_time = status.get('response_time', 0.0) or 0.0
+                    print(f"  {emoji} {service}: saudável (tempo: {resp_time:.3f}s)")
                 else:
-                    print(f"  {emoji} {service}: {status['status']}")
+                    print(f"  {emoji} {service}: indisponível")
                     if 'error' in status:
                         # Mostrar apenas parte do erro para não poluir
                         error_msg = str(status['error'])
@@ -269,7 +330,7 @@ class HealthChecker:
                 for service in target_services:
                     if service in self.config.services:
                         status = self.check_application_health(service, verbose=False, use_ingress=use_ingress)
-                        if status['status'] != 'healthy':
+                        if not status.get('healthy', False):
                             all_healthy = False
                             break
             
@@ -292,13 +353,13 @@ class HealthChecker:
         
         print("📡 Testando LoadBalancer (MetalLB):")
         lb_results = self.check_all_applications(verbose=True, use_ingress=False)
-        lb_healthy = sum(1 for r in lb_results.values() if r['status'] == 'healthy')
+        lb_healthy = sum(1 for r in lb_results.values() if r.get('healthy', False))
         print(f"   ✅ LoadBalancer: {lb_healthy}/{len(lb_results)} serviços saudáveis")
         print()
         
         print("🚪 Testando Ingress (NGINX):")
         ing_results = self.check_all_applications(verbose=True, use_ingress=True)
-        ing_healthy = sum(1 for r in ing_results.values() if r['status'] == 'healthy')
+        ing_healthy = sum(1 for r in ing_results.values() if r.get('healthy', False))
         print(f"   ✅ Ingress: {ing_healthy}/{len(ing_results)} serviços saudáveis")
         print()
         
@@ -399,3 +460,97 @@ class HealthChecker:
         except Exception as e:
             print(f"❌ Erro ao verificar node {node_name}: {e}")
             return False
+    
+    def _discover_service_url(self, service_name: str) -> Dict[str, str]:
+        """
+        Descobre URLs de um serviço específico dinamicamente.
+        
+        Args:
+            service_name: Nome do serviço (ex: 'foo-app', 'bar-app')
+            
+        Returns:
+            Dict com URLs descobertas
+        """
+        discovered_urls = {}
+        
+        try:
+            # 1. Descobrir LoadBalancer Services
+            result = subprocess.run([
+                'kubectl', 'get', 'services', 
+                '--context', self.config.context,
+                '-o', 'json'
+            ], capture_output=True, text=True, check=True)
+            
+            services_data = json.loads(result.stdout)
+            
+            for service in services_data['items']:
+                svc_name = service['metadata']['name']
+                
+                # Verificar se o serviço corresponde ao app
+                # foo-app -> foo-loadbalancer, foo-service
+                # bar-app -> bar-loadbalancer, bar-service  
+                # test-app -> test-loadbalancer, test-service
+                app_base = service_name.replace('-app', '')  # foo-app -> foo
+                
+                if (svc_name == f"{app_base}-loadbalancer" or 
+                    svc_name == f"{app_base}-service" or
+                    svc_name.startswith(f"{app_base}-")):
+                    
+                    # LoadBalancer
+                    if service['spec'].get('type') == 'LoadBalancer':
+                        ingress = service['status'].get('loadBalancer', {}).get('ingress', [])
+                        if ingress and ingress[0].get('ip'):
+                            ip = ingress[0]['ip']
+                            port = service['spec']['ports'][0]['port']
+                            
+                            # Inferir endpoint baseado no nome do app
+                            endpoint = f"/{app_base}"  # /foo, /bar, /test
+                            discovered_urls['loadbalancer_url'] = f"http://{ip}:{port}{endpoint}"
+                    
+                    # NodePort
+                    elif service['spec'].get('type') == 'NodePort':
+                        node_port = service['spec']['ports'][0]['nodePort']
+                        # Obter IP de qualquer nó
+                        nodes_result = subprocess.run([
+                            'kubectl', 'get', 'nodes',
+                            '--context', self.config.context,
+                            '-o', 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+                        ], capture_output=True, text=True, check=True)
+                        
+                        if nodes_result.stdout.strip():
+                            node_ip = nodes_result.stdout.strip()
+                            endpoint = f"/{app_base}"  # /foo, /bar, /test  
+                            discovered_urls['nodeport_url'] = f"http://{node_ip}:{node_port}{endpoint}"
+            
+            # 2. Descobrir Ingress
+            try:
+                ingress_result = subprocess.run([
+                    'kubectl', 'get', 'ingress',
+                    '--context', self.config.context,
+                    '-o', 'json'
+                ], capture_output=True, text=True, check=True)
+                
+                ingress_data = json.loads(ingress_result.stdout)
+                
+                for ingress in ingress_data['items']:
+                    rules = ingress['spec'].get('rules', [])
+                    for rule in rules:
+                        paths = rule.get('http', {}).get('paths', [])
+                        for path in paths:
+                            backend_service = path['backend']['service']['name']
+                            # Verificar se o backend service corresponde ao app
+                            app_base = service_name.replace('-app', '')
+                            if (backend_service == f"{app_base}-service" or 
+                                backend_service.startswith(f"{app_base}-")):
+                                host = rule.get('host', 'localhost')
+                                path_str = path.get('path', '/')
+                                discovered_urls['ingress_url'] = f"http://{host}{path_str}"
+                                break
+            except subprocess.CalledProcessError:
+                # Ingress não disponível ou sem permissões
+                pass
+        
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir URLs para {service_name}: {e}")
+        
+        return discovered_urls

@@ -7,7 +7,7 @@ Interface de linha de comando que mantém TODAS as flags originais
 e adiciona funcionalidades de timeout configurável e CSV em tempo real.
 
 Uso:
-    python3 reliability_tester.py --component pod --failure-method kill_processes --target test-app-549846444f-pbsgl --iterations 30 --interval 10
+    python3 reliability_tester.py --component pod --failure-method kill_processes --target <POD_NAME> --iterations 30 --interval 10
 
 Flags Principais:
     --component: Tipo de componente (pod, worker_node, control_plane)
@@ -41,7 +41,7 @@ def create_parser():
 Exemplos de uso:
 
   # Teste básico em um pod específico
-  python3 reliability_tester.py --component pod --failure-method kill_processes --target test-app-549846444f-pbsgl --iterations 30 --interval 10
+  python3 reliability_tester.py --component pod --failure-method kill_processes --target <POD_NAME> --iterations 30 --interval 10
 
   # Teste com timeout personalizado
   python3 reliability_tester.py --component pod --failure-method delete_pod --iterations 5 --timeout 180

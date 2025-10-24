@@ -10,8 +10,9 @@ Módulo para injeção de falhas específicas em componentes do control plane:
 """
 
 import subprocess
-from typing import Tuple
+from typing import Tuple, Optional
 from ..utils.config import get_config
+from ..monitoring.system_monitor import SystemMonitor
 
 
 class ControlPlaneInjector:
@@ -28,25 +29,49 @@ class ControlPlaneInjector:
     def __init__(self):
         """Inicializa o injetor de falhas do control plane."""
         self.config = get_config()
+        self.system_monitor = SystemMonitor()
     
-    def kill_kube_apiserver(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
+    def _get_control_plane_target(self, target: Optional[str] = None) -> str:
+        """
+        Obtém o nome do control plane automaticamente ou usa o fornecido.
+        
+        Args:
+            target: Nome específico do control plane (opcional)
+            
+        Returns:
+            Nome do control plane a ser usado
+        """
+        if target:
+            return target
+        
+        # Descobrir automaticamente
+        discovered_cp = self.system_monitor.get_control_plane_node()
+        if discovered_cp:
+            return discovered_cp
+        
+        raise ValueError("Nenhum control plane foi descoberto automaticamente. Especifique manualmente com target='nome-do-node'")
+    
+    def kill_kube_apiserver(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata o processo kube-apiserver (static pod reinicia automaticamente).
         
         Args:
-            target: Nome do nó control plane
+            target: Nome do nó control plane (opcional - será descoberto automaticamente)
             
         Returns:
             Tuple com (sucesso, comando_executado)
         """
-        command = f"docker exec {target} pkill -9 -f kube-apiserver"
+        # Descobrir target automaticamente se não fornecido
+        actual_target = self._get_control_plane_target(target)
+        
+        command = f"docker exec {actual_target} pkill -9 -f kube-apiserver"
         print(f"🎯 Executando: {command}")
-        print(f"⚡ Matando kube-apiserver no {target}...")
+        print(f"⚡ Matando kube-apiserver no {actual_target}...")
         
         try:
             # Usar docker exec para Kind com -f para match full command line
             result = subprocess.run([
-                'docker', 'exec', target, 'pkill', '-9', '-f', 'kube-apiserver'
+                'docker', 'exec', actual_target, 'pkill', '-9', '-f', 'kube-apiserver'
             ], capture_output=True, text=True, check=True)
             
             print(f"✅ kube-apiserver morto (static pod irá reiniciar)")
@@ -56,7 +81,7 @@ class ControlPlaneInjector:
             print(f"⚠️ Processo finalizado: {e}")
             return True, command  # Sucesso mesmo com erro (processo morreu)
     
-    def kill_kube_controller_manager(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
+    def kill_kube_controller_manager(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata o processo kube-controller-manager (static pod reinicia automaticamente).
         
@@ -66,6 +91,11 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
+        if target is None:
+            target = self._get_control_plane_target()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
         command = f"docker exec {target} pkill -9 -f kube-controller-manager"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kube-controller-manager no {target}...")
@@ -82,7 +112,7 @@ class ControlPlaneInjector:
             print(f"⚠️ Processo finalizado: {e}")
             return True, command
     
-    def kill_kube_scheduler(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
+    def kill_kube_scheduler(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata o processo kube-scheduler (static pod reinicia automaticamente).
         
@@ -92,6 +122,11 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
+        if target is None:
+            target = self._get_control_plane_target()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
         command = f"docker exec {target} pkill -9 -f kube-scheduler"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kube-scheduler no {target}...")
@@ -108,7 +143,7 @@ class ControlPlaneInjector:
             print(f"⚠️ Processo finalizado: {e}")
             return True, command
     
-    def kill_etcd(self, target: str = "local-k8s-control-plane") -> Tuple[bool, str]:
+    def kill_etcd(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata o processo etcd (static pod reinicia automaticamente).
         CUIDADO: Cluster ficará "mudo" temporariamente.
@@ -119,6 +154,11 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
+        if target is None:
+            target = self._get_control_plane_target()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
         command = f"docker exec {target} pkill -9 -f etcd"
         print(f"🎯 Executando: {command}")
         print(f"⚠️ ATENÇÃO: Matando etcd no {target} - cluster ficará temporariamente indisponível!")
@@ -135,7 +175,7 @@ class ControlPlaneInjector:
             print(f"⚠️ Processo finalizado: {e}")
             return True, command
     
-    def kill_kubelet(self, target: str = "local-k8s-worker") -> Tuple[bool, str]:
+    def kill_kubelet(self, target: Optional[str] = None) -> Tuple[bool, str]:
         """
         Mata o processo kubelet em um nó (reinicia automaticamente em Kind).
         
@@ -145,6 +185,19 @@ class ControlPlaneInjector:
         Returns:
             Tuple com (sucesso, comando_executado)
         """
+        if target is None:
+            # Para kubelet, podemos usar qualquer nó (worker ou control plane)
+            target = self._get_control_plane_target()
+            if not target:
+                # Se não achou control plane, tentar worker node
+                from kuber_bomber.monitoring.system_monitor import SystemMonitor
+                monitor = SystemMonitor()
+                worker_nodes = monitor.get_worker_nodes()
+                if worker_nodes:
+                    target = worker_nodes[0]
+                else:
+                    return False, "Não foi possível descobrir nó para kubelet automaticamente"
+                    
         command = f"docker exec {target} pkill -9 -f kubelet"
         print(f"🎯 Executando: {command}")
         print(f"⚡ Matando kubelet no {target}...")
