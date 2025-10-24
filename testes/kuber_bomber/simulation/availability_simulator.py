@@ -47,9 +47,9 @@ class Component:
             elif self.component_type == "node":
                 self.available_failure_methods = [
                     "kill_worker_node_processes",
-                    "stop_worker_node",
-                    "pause_worker_node",
-                    "simulate_network_partition"
+                    "kill_kubelet",
+                    "delete_kube_proxy",
+                    "restart_containerd"
                 ]
             elif self.component_type == "control_plane":
                 self.available_failure_methods = [
@@ -638,20 +638,20 @@ class AvailabilitySimulator:
             elif component.component_type == "node":
                 # Executar método escolhido aleatoriamente para nodes
                 if failure_method == "kill_worker_node_processes":
-                    success = self.node_injector.kill_worker_node_processes(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (kill processes)")
-                elif failure_method == "stop_worker_node":
-                    success = self.node_injector.stop_worker_node(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (stop node)")
-                elif failure_method == "pause_worker_node":
-                    success = self.node_injector.pause_worker_node(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (pause node)")
-                elif failure_method == "simulate_network_partition":
-                    success = self.node_injector.simulate_network_partition(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (network partition)")
+                    success, _ = self.node_injector.kill_worker_node_processes(component.name)
+                    print(f"  🎯 Falha injetada no node: {component.name} (kill worker processes)")
+                elif failure_method == "kill_kubelet":
+                    success, _ = self.control_plane_injector.kill_kubelet(component.name)
+                    print(f"  🎯 Falha injetada no node: {component.name} (kill kubelet)")
+                elif failure_method == "delete_kube_proxy":
+                    success, _ = self.control_plane_injector.delete_kube_proxy_pod(component.name)
+                    print(f"  🎯 Falha injetada no node: {component.name} (delete kube-proxy)")
+                elif failure_method == "restart_containerd":
+                    success, _ = self.control_plane_injector.restart_containerd(component.name)
+                    print(f"  🎯 Falha injetada no node: {component.name} (restart containerd)")
                 else:
                     # Fallback
-                    success = self.node_injector.kill_worker_node_processes(component.name)
+                    success, _ = self.node_injector.kill_worker_node_processes(component.name)
                     print(f"  🎯 Falha injetada no node: {component.name} (fallback)")
                 
             elif component.component_type == "control_plane":
@@ -767,12 +767,40 @@ class AvailabilitySimulator:
                     # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
                         
                 elif component.component_type in ["node", "control_plane"]:
-                    # Para nodes, verificar se está Ready no Kubernetes
-                    if self.health_checker.is_node_ready(component.name):
+                    # Para nodes, PRIMEIRO verificar se todas as aplicações estão funcionando (curl/HTTP)
+                    # Verificar se todas as aplicações definidas nos critérios estão funcionando
+                    all_apps_healthy = True
+                    apps_status = []
+                    
+                    for app_name in self.availability_criteria.keys():
+                        health_result = self.health_checker.check_application_health(app_name, verbose=False)
+                        is_healthy = health_result.get('healthy', False)
+                        url_info = health_result.get('url_type', 'unknown')
+                        apps_status.append(f"{app_name}: {'✅' if is_healthy else '❌'} ({url_info})")
+                        
+                        if not is_healthy:
+                            all_apps_healthy = False
+                    
+                    if all_apps_healthy:
+                        # Todas as apps estão funcionando via HTTP - recuperação confirmada!
                         recovery_time = time.time() - start_time
-                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (node Ready)")
+                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (todas apps funcionando via HTTP)")
                         component.current_status = 'healthy'
                         return recovery_time
+                    else:
+                        # Apps ainda não funcionando, verificar node status como informação adicional
+                        node_ready = self.health_checker.is_node_ready(component.name)
+                        node_status = "Ready" if node_ready else "NotReady"
+                        
+                        print(f"  ⏳ Apps ainda recuperando (node: {node_status}): {', '.join(apps_status)}")
+                        
+                        # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 2min, aceitar
+                        if node_ready and (time.time() - start_time) > 120:  # 2 minutos
+                            print(f"  ⚠️ FALLBACK: Node Ready há >2min mas apps não respondem HTTP")
+                            recovery_time = time.time() - start_time
+                            print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (fallback: node Ready)")
+                            component.current_status = 'healthy'
+                            return recovery_time
                 
                 time.sleep(check_interval)
                 
@@ -897,6 +925,12 @@ class AvailabilitySimulator:
                 # Aguardar 1 minuto real (delay fixo) - DEPOIS da recuperação
                 print(f"⏸️ Aguardando {self.real_delay_between_failures}s (delay entre falhas)...")
                 time.sleep(self.real_delay_between_failures)
+                
+                # Para nodes, aguardar um tempo adicional para pods se estabilizarem
+                if next_event.component.component_type in ["node", "control_plane"]:
+                    stabilization_time = 30  # 30 segundos extras para estabilização
+                    print(f"⏳ Aguardando {stabilization_time}s extras para estabilização do sistema...")
+                    time.sleep(stabilization_time)
                 
                 # Verificar disponibilidade do sistema após falha
                 system_available_after, availability_details = self.is_system_available()
