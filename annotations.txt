@@ -108,3 +108,4 @@ Coisas para fazer agora:
 - Tempo que espera nao importa sera 1min e computo 300...
 
 - Os que nao for self-healing, espera 1min
+
