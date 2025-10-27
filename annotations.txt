@@ -109,3 +109,4 @@ Coisas para fazer agora:
 
 - Os que nao for self-healing, espera 1min
 
+=

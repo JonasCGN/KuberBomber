@@ -1,0 +1,19 @@
+--------------------1--------------------
+
+- Definir quantos pods cabem dentro de um worker_node
+
+- Tentar desligar e depois tentar dar um start em um worker_node e definir o MTTR sera o tempo de recuperacao
+
+-----------------------------------------
+
+- Configuracao de 3 worker_node cada um cabendo 3 pods independente do pod contando com as réplicas
+- Couber sem contar os de sistemas, precisa dos de sistemas 
+- e descobrir a disponibilidade dela e rodar 30x
+- Vai ter todos tipos de falha mais o 1-2(acima)
+- Pegar a media e desvio padrao pra cada, gerar csv de cada interecao
+- Salvar a configuração de MTTF e MTTR para o experimento
+
+- Mandar para o IURE para fazer a validação
+
+-----------------------------------------
+
