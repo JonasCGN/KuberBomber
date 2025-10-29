@@ -7,6 +7,11 @@
 -----------------------------------------
 
 - Configuracao de 3 worker_node cada um cabendo 3 pods independente do pod contando com as réplicas
+
+- Fazer uma classe de configuracao facil, para configuracao de MTTF e MTTR dos componentes
+- Deixar uma classe extremamente simplificada para configuracao e sera executado em loop em cima dessa classe
+
+
 - Couber sem contar os de sistemas, precisa dos de sistemas 
 - e descobrir a disponibilidade dela e rodar 30x
 - Vai ter todos tipos de falha mais o 1-2(acima)
