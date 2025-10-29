@@ -184,6 +184,7 @@ nodes:
   - role: control-plane
   - role: worker
   - role: worker
+  - role: worker
 EOF
 
     kind create cluster --name "$CLUSTER_NAME" --config /tmp/kind-config.yaml

@@ -1,4 +1,4 @@
-.PHONY: run_port_forward run_deploy run_testes run_all_failures run_graficos run_simulation
+.PHONY: run_port_forward run_deploy run_testes run_all_failures run_graficos run_simulation run_deploy_clean
 
 run_port_forward:
 	cd Kubernetes-Clusters && nohup ./scripts/deploy.sh --port-forwards > port_forward.log 2>&1 &
@@ -8,7 +8,9 @@ run_deploy_clean:
 # 	kubectl config delete-context local-k8s 2>/dev/null || true
 # 	kubectl config delete-context kind-local-k8s 2>/dev/null || true
 # 	cd Kubernetes-Clusters && ./scripts/deploy.sh --clean
-	sleep 30 && cd Kubernetes-Clusters && ./scripts/deploy.sh --local --deploy --ubuntu
+# 	sleep 30
+	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --setup
+	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --deploy --ubuntu
 
 run_deploy:
 	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --setup
@@ -58,4 +60,4 @@ run_graficos:
 
 run_simulation:
 	. .venv/bin/activate && \
-	cd /home/jonascgn/Documentos/1_Artigo/testes && python -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 1
+	cd /home/jonascgn/Documentos/1_Artigo/testes && python -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5 --use-config-simples

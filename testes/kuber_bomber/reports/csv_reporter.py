@@ -40,6 +40,59 @@ class CSVReporter:
         self.current_csvfile = None
         self._is_realtime_active = False
     
+    def create_simulation_directory(self, iteration: int) -> str:
+        """
+        Cria estrutura de diretórios para simulação de disponibilidade:
+        simulation/2025/10/24/{HORA}/ITERACAO{X}/
+        
+        Args:
+            iteration: Número da iteração
+        Returns:
+            Caminho do diretório criado
+        """
+        now = datetime.now()
+        year = now.strftime('%Y')
+        month = now.strftime('%m') 
+        day = now.strftime('%d')
+        hour = now.strftime('%H%M%S')
+        
+        # Criar diretório da simulação se não existir
+        if not hasattr(self, '_simulation_base_dir'):
+            self._simulation_base_dir = os.path.join(
+                self.base_dir, 'simulation', year, month, day, hour
+            )
+            os.makedirs(self._simulation_base_dir, exist_ok=True)
+        
+        # Criar diretório da iteração
+        iteration_dir = os.path.join(self._simulation_base_dir, f'ITERACAO{iteration}')
+        os.makedirs(iteration_dir, exist_ok=True)
+        return iteration_dir
+
+    def _save_events_csv(self, filepath: str, events: List[Dict]):
+        """Salva eventos em CSV."""
+        if not events:
+            return
+        
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = list(events[0].keys())
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(events)
+        except Exception as e:
+            print(f"❌ Erro ao salvar eventos: {e}")
+
+    def _save_stats_csv(self, filepath: str, stats: Dict):
+        """Salva estatísticas em CSV."""
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['metric', 'value'])
+                for key, value in stats.items():
+                    writer.writerow([key, value])
+        except Exception as e:
+            print(f"❌ Erro ao salvar estatísticas: {e}")
+
     def _create_full_directory(self, component_type: str, failure_method: str) -> str:
         """
         Cria estrutura de diretórios:
@@ -405,155 +458,66 @@ class CSVReporter:
         """
         return self.current_file if self._is_realtime_active else None
     
-    def save_availability_results(self, results: List[Dict], simulation_stats: Dict, output_dir: Optional[str] = None) -> str:
+    def save_iteration_results(self, events: List[Dict], stats: Dict, iteration: int):
         """
-        ⭐ SALVA RESULTADOS DE SIMULAÇÃO DE DISPONIBILIDADE ⭐
-        
-        Salva resultados de simulação de disponibilidade com estatísticas detalhadas.
+        Salva resultados de uma iteração individual organizados por diretório.
         
         Args:
-            results: Lista de eventos de falha simulados
-            simulation_stats: Estatísticas da simulação
-            output_dir: Diretório de saída (opcional)
-            
-        Returns:
-            Caminho do arquivo criado
+            events: Lista de eventos da iteração
+            stats: Estatísticas da iteração  
+            iteration: Número da iteração
         """
-        if not results:
-            print("⚠️ Nenhum resultado para salvar")
-            return ""
-        
+        # Criar diretório da simulação/iteração
         now = datetime.now()
-        timestamp = now.strftime('%Y%m%d_%H%M%S')
+        year = now.strftime('%Y')
+        month = now.strftime('%m') 
+        day = now.strftime('%d')
+        hour = now.strftime('%H%M%S')
         
-        # Usar diretório padrão se não especificado
-        if output_dir is None:
-            output_dir = self._create_full_directory("availability_simulation", "mttf_based")
+        # Criar diretório da simulação se não existir
+        if not hasattr(self, '_simulation_base_dir'):
+            self._simulation_base_dir = os.path.join(
+                self.base_dir, 'simulation', year, month, day, hour
+            )
+            os.makedirs(self._simulation_base_dir, exist_ok=True)
         
-        # Criar arquivo principal de resultados
-        results_file = os.path.join(output_dir, f"availability_simulation_{timestamp}.csv")
+        # Criar diretório da iteração
+        iteration_dir = os.path.join(self._simulation_base_dir, f'ITERACAO{iteration}')
+        os.makedirs(iteration_dir, exist_ok=True)
         
-        # Campos do arquivo de resultados
-        fieldnames = [
-            'event_time_hours', 'real_time_seconds', 'component_type', 'component_name',
-            'failure_type', 'recovery_time_seconds', 'system_available', 'available_pods',
-            'required_pods', 'availability_percentage', 'downtime_duration', 'cumulative_downtime'
-        ]
+        # Salvar CSV de eventos da iteração
+        if events:
+            events_file = os.path.join(iteration_dir, 'events.csv')
+            self._save_iteration_events_csv(events_file, events)
+        
+        # Salvar CSV de estatísticas da iteração  
+        stats_file = os.path.join(iteration_dir, 'statistics.csv')
+        self._save_iteration_stats_csv(stats_file, stats)
+        
+        print(f"💾 Resultados da iteração {iteration} salvos em: {iteration_dir}")
+        return iteration_dir
+
+    def _save_iteration_events_csv(self, filepath: str, events: List[Dict]):
+        """Salva eventos de uma iteração em CSV."""
+        if not events:
+            return
         
         try:
-            with open(results_file, 'w', newline='', encoding='utf-8') as csvfile:
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = list(events[0].keys())
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
-                
-                for result in results:
-                    writer.writerow(result)
-            
-            # Criar arquivo de estatísticas
-            stats_file = os.path.join(output_dir, f"simulation_stats_{timestamp}.csv")
-            
-            stats_fieldnames = [
-                'metric', 'value', 'unit', 'description'
-            ]
-            
-            with open(stats_file, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=stats_fieldnames)
-                writer.writeheader()
-                
-                # Escrever estatísticas principais
-                stats_rows = [
-                    {
-                        'metric': 'simulation_duration_hours',
-                        'value': simulation_stats.get('total_simulation_time', 0),
-                        'unit': 'hours',
-                        'description': 'Duração total da simulação'
-                    },
-                    {
-                        'metric': 'total_failures',
-                        'value': simulation_stats.get('total_failures', 0),
-                        'unit': 'count',
-                        'description': 'Total de falhas simuladas'
-                    },
-                    {
-                        'metric': 'system_availability',
-                        'value': simulation_stats.get('system_availability', 0),
-                        'unit': 'percentage',
-                        'description': 'Disponibilidade geral do sistema'
-                    },
-                    {
-                        'metric': 'mean_recovery_time',
-                        'value': simulation_stats.get('mean_recovery_time', 0),
-                        'unit': 'seconds',
-                        'description': 'Tempo médio de recuperação'
-                    },
-                    {
-                        'metric': 'total_downtime',
-                        'value': simulation_stats.get('total_downtime', 0),
-                        'unit': 'hours',
-                        'description': 'Tempo total de indisponibilidade'
-                    },
-                    {
-                        'metric': 'iterations_executed',
-                        'value': simulation_stats.get('iterations', 1),
-                        'unit': 'count',
-                        'description': 'Número de iterações executadas'
-                    }
-                ]
-                
-                for row in stats_rows:
-                    writer.writerow(row)
-            
-            print(f"✅ 📊 Resultados de disponibilidade salvos:")
-            print(f"   📁 Eventos: {results_file}")
-            print(f"   📈 Estatísticas: {stats_file}")
-            print(f"   🎯 {len(results)} eventos registrados")
-            print(f"   📊 Disponibilidade: {simulation_stats.get('system_availability', 0):.2f}%")
-            
-            return results_file
-            
+                writer.writerows(events)
         except Exception as e:
-            print(f"❌ Erro ao salvar resultados de disponibilidade: {e}")
-            return ""
-    
-    def load_test_results(self, filepath: str) -> List[Dict]:
-        """
-        Carrega resultados de teste de um arquivo CSV.
-        
-        Args:
-            filepath: Caminho para o arquivo CSV
-            
-        Returns:
-            Lista com dados carregados
-        """
+            print(f"❌ Erro ao salvar eventos da iteração: {e}")
+
+    def _save_iteration_stats_csv(self, filepath: str, stats: Dict):
+        """Salva estatísticas de uma iteração em CSV."""
         try:
-            results = []
-            with open(filepath, 'r', encoding='utf-8') as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    # Pular linhas de resumo
-                    if row.get('iteration') == 'RESUMO':
-                        continue
-                    
-                    # Converter tipos de dados apropriados
-                    if 'iteration' in row and row['iteration'].isdigit():
-                        row['iteration'] = int(row['iteration'])
-                    if 'recovery_time_seconds' in row:
-                        try:
-                            row['recovery_time_seconds'] = float(row['recovery_time_seconds'])
-                        except ValueError:
-                            pass
-                    if 'total_time_seconds' in row:
-                        try:
-                            row['total_time_seconds'] = float(row['total_time_seconds'])
-                        except ValueError:
-                            pass
-                    if 'recovered' in row:
-                        row['recovered'] = row['recovered'].lower() == 'true'
-                    
-                    results.append(row)
-            
-            print(f"📊 Carregados {len(results)} resultados de {filepath}")
-            return results
-            
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['metric', 'value'])
+                for key, value in stats.items():
+                    writer.writerow([key, value])
         except Exception as e:
-            print(f"❌ Erro ao carregar arquivo {filepath}: {e}")
-            return []
+            print(f"❌ Erro ao salvar estatísticas da iteração: {e}")

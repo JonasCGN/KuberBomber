@@ -1,2 +1,6 @@
 requests>=2.28.0
 numpy
+docker>=6.0.0
+pandas
+matplotlib
+seaborn

@@ -142,10 +142,33 @@ O simulador irá:
         help='Mostrar componentes configurados e seus MTTFs'
     )
     
+    parser.add_argument(
+        '--use-config-simples',
+        action='store_true',
+        help='Usar ConfigSimples para configuração de MTTF/MTTR detalhada'
+    )
+    
     args = parser.parse_args()
     
     # Criar simulador
     simulator = AvailabilitySimulator()
+    
+    # Verificar se deve usar ConfigSimples
+    if args.use_config_simples:
+        from kuber_bomber.core.config_simples import ConfigSimples
+        
+        print("🔧 === CONFIGURAÇÃO SIMPLIFICADA ===")
+        print("Usando ConfigSimples para MTTF/MTTR detalhado...")
+        print()
+        
+        # Criar configuração simples
+        config_simples = ConfigSimples()
+        config_simples.print_summary()
+        
+        # Aplicar configuração ao simulador
+        simulator._apply_config_simples(config_simples)
+        print("✅ ConfigSimples aplicado ao simulador")
+        print()
     
     # Configurar delay se especificado
     if args.delay != 60:

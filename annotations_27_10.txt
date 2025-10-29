@@ -11,14 +11,27 @@
 - Fazer uma classe de configuracao facil, para configuracao de MTTF e MTTR dos componentes
 - Deixar uma classe extremamente simplificada para configuracao e sera executado em loop em cima dessa classe
 
-
 - Couber sem contar os de sistemas, precisa dos de sistemas 
-- e descobrir a disponibilidade dela e rodar 30x
-- Vai ter todos tipos de falha mais o 1-2(acima)
+
+- e descobrir a disponibilidade(teste de simulacao anterior) e rodar 30x
+- Vai ter todos tipos de falha mais o shutdown_worker_node
 - Pegar a media e desvio padrao pra cada, gerar csv de cada interecao
 - Salvar a configuração de MTTF e MTTR para o experimento
 
-- Mandar para o IURE para fazer a validação
 
 -----------------------------------------
 
+
+- Mandar para o IURE para fazer a validação
+
+Classe ConfigSimples para refletir no availability_cli.py(Basicamente o que foi feito anteriormente),
+A unica coisa que voce precisa é adicionar mais um metodo de falha em worker node, e vamos executar o availability_cli
+pq ele da os csv tudo certinho, so vamos orgranizar em interacoes componentes
+availability_csv/
+
+1
+2
+3
+4
+..
+n_interacoes

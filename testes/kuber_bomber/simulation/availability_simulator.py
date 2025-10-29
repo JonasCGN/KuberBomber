@@ -49,7 +49,8 @@ class Component:
                     "kill_worker_node_processes",
                     "kill_kubelet",
                     "delete_kube_proxy",
-                    "restart_containerd"
+                    "restart_containerd",
+                    "shutdown_worker_node"  # Adicionar shutdown de VM
                 ]
             elif self.component_type == "control_plane":
                 self.available_failure_methods = [
@@ -142,6 +143,10 @@ class AvailabilitySimulator:
         self.pod_injector = PodFailureInjector()
         self.node_injector = NodeFailureInjector()
         self.control_plane_injector = ControlPlaneInjector()
+        
+        # Importar VM injector para shutdown de nodes
+        from ..failure_injectors.vm_injector import VmFailureInjector
+        self.vm_injector = VmFailureInjector()
         
         # Reporter CSV
         self.csv_reporter = CSVReporter()
@@ -649,6 +654,10 @@ class AvailabilitySimulator:
                 elif failure_method == "restart_containerd":
                     success, _ = self.control_plane_injector.restart_containerd(component.name)
                     print(f"  🎯 Falha injetada no node: {component.name} (restart containerd)")
+                elif failure_method == "shutdown_worker_node":
+                    # Lógica especial para shutdown de VM
+                    success = self._handle_shutdown_worker_node(component.name)
+                    print(f"  🎯 Falha injetada no node: {component.name} (shutdown VM)")
                 else:
                     # Fallback
                     success, _ = self.node_injector.kill_worker_node_processes(component.name)
@@ -876,6 +885,9 @@ class AvailabilitySimulator:
             iteration_results = self._run_single_iteration(duration_hours)
             all_results.append(iteration_results)
             
+            # Salvar CSV da iteração individual
+            self._save_iteration_results(iteration, iteration_results)
+            
             print(f"✅ Iteração {iteration} concluída")
             print(f"📈 Disponibilidade: {iteration_results['availability_percentage']:.2f}%")
             print()
@@ -902,7 +914,19 @@ class AvailabilitySimulator:
             # Pegar próximo evento
             next_event = heapq.heappop(self.event_queue)
             
-            # Verificar disponibilidade no período anterior
+            # Se o próximo evento excede a duração, parar e contabilizar apenas até a duração
+            if next_event.time_hours > duration_hours:
+                # Contabilizar tempo disponível do último check até o fim da simulação
+                time_delta = duration_hours - last_check_time
+                system_was_available = self.check_system_availability()
+                if system_was_available:
+                    total_available_time += time_delta
+                
+                # Retornar o evento para a fila (não processado)
+                heapq.heappush(self.event_queue, next_event)
+                break
+            
+            # Verificar disponibilidade no período anterior ao evento
             time_delta = next_event.time_hours - last_check_time
             system_was_available = self.check_system_availability()
             if system_was_available:
@@ -970,6 +994,20 @@ class AvailabilitySimulator:
             
             print()
         
+        # Contabilizar o período final APENAS se nenhum evento foi processado 
+        # (todos os eventos estavam além da duração)
+        if last_check_time == 0.0:
+            # Nenhum evento foi processado - sistema ficou disponível toda a duração
+            system_available_full = self.check_system_availability()
+            if system_available_full:
+                total_available_time = duration_hours
+            print(f"📊 Nenhum evento processado - período completo: {duration_hours}h (disponível: {system_available_full})")
+        
+        print(f"📊 Resumo da iteração:")
+        print(f"  • Duração total: {duration_hours}h")
+        print(f"  • Tempo disponível: {total_available_time:.3f}h")
+        print(f"  • Tempo indisponível: {duration_hours - total_available_time:.3f}h")
+        
         # Calcular disponibilidade final
         availability_percentage = (total_available_time / duration_hours) * 100 if duration_hours > 0 else 0
         
@@ -992,7 +1030,7 @@ class AvailabilitySimulator:
     
     def _generate_final_report(self, all_results: List[Dict]):
         """
-        Gera relatório final com todas as iterações.
+        Gera relatório final com todas as iterações incluindo estatísticas detalhadas.
         
         Args:
             all_results: Lista com resultados de todas as iterações
@@ -1003,63 +1041,504 @@ class AvailabilitySimulator:
             print("❌ Nenhum resultado para reportar")
             return
         
-        # Estatísticas agregadas
+        # Estatísticas agregadas básicas
         total_iterations = len(all_results)
-        avg_availability = sum(r['availability_percentage'] for r in all_results) / total_iterations
-        min_availability = min(r['availability_percentage'] for r in all_results)
-        max_availability = max(r['availability_percentage'] for r in all_results)
+        availabilities = [r['availability_percentage'] for r in all_results]
+        avg_availability = sum(availabilities) / total_iterations
+        min_availability = min(availabilities)
+        max_availability = max(availabilities)
         total_failures = sum(r['total_failures'] for r in all_results)
         
+        # Calcular desvio padrão da disponibilidade
+        import statistics
+        std_availability = statistics.stdev(availabilities) if len(availabilities) > 1 else 0.0
+        
         print(f"🎯 Simulação de {total_iterations} iterações concluída")
-        print(f"📊 Disponibilidade Média: {avg_availability:.2f}%")
+        print(f"📊 Disponibilidade Média: {avg_availability:.2f}% (±{std_availability:.2f}%)")
         print(f"📉 Disponibilidade Mínima: {min_availability:.2f}%")
         print(f"📈 Disponibilidade Máxima: {max_availability:.2f}%")
         print(f"💥 Total de Falhas: {total_failures}")
         print()
         
-        # Relatório por componente
-        print("🔧 === ESTATÍSTICAS POR COMPONENTE ===")
+        # Salvar configuração MTTF/MTTR usada no experimento
+        config_data = self._save_experiment_configuration(all_results)
+        
+        # Calcular estatísticas detalhadas por componente
+        component_stats = self._calculate_component_statistics(all_results)
+        
+        # Relatório por componente com estatísticas
+        print("🔧 === ESTATÍSTICAS DETALHADAS POR COMPONENTE ===")
+        for component_name, stats in component_stats.items():
+            print(f"  📦 {component_name}:")
+            print(f"    • MTTF configurado: {stats['mttf_configured']}h")
+            print(f"    • Falhas por iteração: {stats['failures_mean']:.2f} (±{stats['failures_std']:.2f})")
+            print(f"    • MTTR médio: {stats['mttr_mean']:.2f}s (±{stats['mttr_std']:.2f}s)")
+            print(f"    • Downtime total médio: {stats['downtime_mean']:.4f}h (±{stats['downtime_std']:.4f}h)")
+            print(f"    • Taxa de falha observada: {stats['observed_failure_rate']:.4f} falhas/h")
+        
+        # Salvar CSVs detalhados
+        self._save_detailed_statistics(all_results, component_stats, config_data)
+        
+        print()
+        print("📊 === VERIFICAÇÃO DOS CÁLCULOS ===")
+        self._verify_calculations(all_results, component_stats)
+    
+    def _save_experiment_configuration(self, all_results: List[Dict]) -> Dict:
+        """
+        Salva a configuração MTTF/MTTR usada no experimento no diretório da simulação.
+        
+        Returns:
+            Dicionário com configuração salva
+        """
+        from datetime import datetime
+        import json
+        import os
+        
+        # Obter diretório base da simulação do csv_reporter
+        simulation_base_dir = getattr(self.csv_reporter, '_simulation_base_dir', './simulation')
+        
+        # Criar configuração detalhada
+        config_data = {
+            'experiment_info': {
+                'timestamp': datetime.now().isoformat(),
+                'total_iterations': len(all_results),
+                'duration_per_iteration': all_results[0]['duration_hours'] if all_results else 0,
+                'total_simulation_time': len(all_results) * all_results[0]['duration_hours'] if all_results else 0,
+                'real_delay_between_failures': self.real_delay_between_failures
+            },
+            'availability_criteria': dict(self.availability_criteria),
+            'component_configuration': {},
+            'failure_methods_available': {},
+            'config_simples_used': hasattr(self, '_config_simples')
+        }
+        
+        # Salvar configuração de cada componente
         for component in self.components:
-            total_failures_comp = sum(
-                sum(1 for c in r['components'] if c['name'] == component.name and c['failures'] > 0)
-                for r in all_results
-            )
-            avg_failures = total_failures_comp / total_iterations if total_iterations > 0 else 0
-            
-            print(f"  📦 {component.name}:")
-            print(f"    • MTTF configurado: {component.mttf_hours}h")
-            print(f"    • Falhas médias por iteração: {avg_failures:.1f}")
-        
-        # Salvar CSV
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = f"availability_simulation_{timestamp}.csv"
-        
-        try:
-            # Coletar todos os eventos de todas as iterações
-            all_events = []
-            for result in all_results:
-                if 'event_records' in result:
-                    all_events.extend(result['event_records'])
-            
-            print(f"📊 Total de eventos registrados: {len(all_events)}")
-            
-            # Preparar estatísticas para salvar
-            simulation_stats = {
-                'total_simulation_time': all_results[0].get('duration_hours', 0) if all_results else 0,
-                'total_failures': len(all_events),
-                'system_availability': avg_availability,
-                'mean_recovery_time': sum(event.get('recovery_time_seconds', 0) for event in all_events) / len(all_events) if all_events else 0,
-                'total_downtime': sum(event.get('downtime_duration', 0) for event in all_events),
-                'iterations': total_iterations
+            config_data['component_configuration'][component.name] = {
+                'component_type': component.component_type,
+                'mttf_hours': component.mttf_hours,
+                'mttr_configured': getattr(component, 'mttr_hours', 'auto-healing'),
+                'failure_methods': component.available_failure_methods
             }
             
-            # Salvar eventos no CSV
-            if all_events:
-                self.csv_reporter.save_availability_results(all_events, simulation_stats)
-                print(f"💾 Relatório salvo com {len(all_events)} eventos")
-            else:
-                print("⚠️ Nenhum evento foi registrado durante a simulação")
+            # Agrupar métodos por tipo
+            comp_type = component.component_type
+            if comp_type not in config_data['failure_methods_available']:
+                config_data['failure_methods_available'][comp_type] = set()
+            config_data['failure_methods_available'][comp_type].update(component.available_failure_methods)
+        
+        # Converter sets para listas para JSON
+        for comp_type in config_data['failure_methods_available']:
+            config_data['failure_methods_available'][comp_type] = list(config_data['failure_methods_available'][comp_type])
+        
+        # Salvar ConfigSimples se foi usado
+        if hasattr(self, '_config_simples'):
+            config_simples_file = self._save_config_simples_to_simulation_dir(simulation_base_dir)
+            config_data['config_simples_file'] = os.path.basename(config_simples_file) if config_simples_file else None
+        
+        # Salvar arquivo de configuração no diretório da simulação
+        config_filename = os.path.join(simulation_base_dir, 'experiment_config.json')
+        
+        try:
+            with open(config_filename, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            print(f"💾 Configuração do experimento salva: {config_filename}")
         except Exception as e:
-            print(f"⚠️ Erro ao salvar CSV: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"⚠️ Erro ao salvar configuração: {e}")
+        
+        return config_data
+    
+    def _calculate_component_statistics(self, all_results: List[Dict]) -> Dict:
+        """
+        Calcula estatísticas detalhadas para cada componente.
+        
+        Args:
+            all_results: Resultados de todas as iterações
+            
+        Returns:
+            Dicionário com estatísticas por componente
+        """
+        import statistics
+        from collections import defaultdict
+        
+        # Inicializar estrutura de dados corretamente
+        def create_component_data():
+            return {
+                'failures_per_iteration': [],
+                'mttr_times': [],
+                'downtime_per_iteration': [],
+                'mttf_configured': 0.0
+            }
+        
+        component_data = defaultdict(create_component_data)
+        
+        # Coletar dados de cada iteração
+        for result in all_results:
+            # Inicializar contadores para esta iteração
+            iteration_failures = defaultdict(int)
+            iteration_downtime = defaultdict(float)
+            
+            # Processar eventos da iteração
+            for event in result.get('event_records', []):
+                comp_name = event['component_name']
+                iteration_failures[comp_name] += 1
+                iteration_downtime[comp_name] += event.get('downtime_duration', 0)
+                component_data[comp_name]['mttr_times'].append(event.get('recovery_time_seconds', 0))
+            
+            # Processar componentes da iteração  
+            for comp_info in result.get('components', []):
+                comp_name = comp_info['name']
+                component_data[comp_name]['failures_per_iteration'].append(iteration_failures[comp_name])
+                component_data[comp_name]['downtime_per_iteration'].append(iteration_downtime[comp_name])
+        
+        # Buscar MTTF configurado de cada componente
+        for component in self.components:
+            if component.name in component_data:
+                component_data[component.name]['mttf_configured'] = component.mttf_hours
+        
+        # Calcular estatísticas
+        component_stats = {}
+        for comp_name, data in component_data.items():
+            failures_list = data['failures_per_iteration']
+            mttr_list = data['mttr_times']
+            downtime_list = data['downtime_per_iteration']
+            
+            # Calcular médias e desvios padrão
+            failures_mean = statistics.mean(failures_list) if failures_list else 0
+            failures_std = statistics.stdev(failures_list) if len(failures_list) > 1 else 0
+            
+            mttr_mean = statistics.mean(mttr_list) if mttr_list else 0
+            mttr_std = statistics.stdev(mttr_list) if len(mttr_list) > 1 else 0
+            
+            downtime_mean = statistics.mean(downtime_list) if downtime_list else 0
+            downtime_std = statistics.stdev(downtime_list) if len(downtime_list) > 1 else 0
+            
+            # Calcular taxa de falha observada (falhas por hora simulada)
+            total_failures = sum(failures_list)
+            total_sim_time = len(all_results) * all_results[0]['duration_hours'] if all_results else 1
+            observed_failure_rate = total_failures / total_sim_time if total_sim_time > 0 else 0
+            
+            component_stats[comp_name] = {
+                'mttf_configured': data['mttf_configured'],
+                'failures_mean': failures_mean,
+                'failures_std': failures_std,
+                'failures_list': failures_list,
+                'mttr_mean': mttr_mean,
+                'mttr_std': mttr_std,
+                'mttr_list': mttr_list,
+                'downtime_mean': downtime_mean,
+                'downtime_std': downtime_std,
+                'downtime_list': downtime_list,
+                'observed_failure_rate': observed_failure_rate,
+                'total_failures': total_failures
+            }
+        
+        return component_stats
+    
+    def _apply_config_simples(self, config_simples):
+        """
+        Aplica configuração do ConfigSimples aos componentes descobertos.
+        Descobre worker nodes disponíveis e cria pods conforme distribuição especificada.
+        
+        Args:
+            config_simples: Instância do ConfigSimples
+        """
+        print("🔧 Aplicando ConfigSimples aos componentes descobertos...")
+        
+        # Descobrir worker nodes disponíveis
+        available_worker_nodes = []
+        control_plane_nodes = []
+        
+        for component in self.components:
+            if component.component_type == "node":
+                available_worker_nodes.append(component.name)
+            elif component.component_type == "control_plane":
+                control_plane_nodes.append(component.name)
+        
+        print(f"📋 Worker nodes disponíveis descobertos: {available_worker_nodes}")
+        print(f"📋 Control plane nodes descobertos: {control_plane_nodes}")
+        
+        # Verificar se ConfigSimples tem configuração de distribuição
+        if hasattr(config_simples, 'worker_nodes_config') and isinstance(config_simples.worker_nodes_config, dict):
+            worker_distribution = config_simples.worker_nodes_config
+            print(f"📊 Distribuição ConfigSimples: {worker_distribution}")
+            
+            # Mapear worker nodes disponíveis para a configuração
+            if len(available_worker_nodes) >= len(worker_distribution):
+                # Temos worker nodes suficientes - usar os disponíveis
+                worker_mapping = {}
+                for i, (config_worker, pod_count) in enumerate(worker_distribution.items()):
+                    if i < len(available_worker_nodes):
+                        actual_worker = available_worker_nodes[i]
+                        worker_mapping[actual_worker] = pod_count
+                        print(f"  🔗 Mapeando {config_worker} → {actual_worker}: {pod_count} pods")
+                
+                # Remover pods existentes que não seguem a nova distribuição
+                self.components = [c for c in self.components if c.component_type != "pod"]
+                
+                # Criar novos pods conforme distribuição
+                for worker_name, pod_count in worker_mapping.items():
+                    for app in config_simples.applications:
+                        for pod_idx in range(pod_count):
+                            pod_name = f"{app}-{pod_idx+1}-{worker_name}"
+                            pod_component = Component(
+                                name=pod_name,
+                                component_type="pod",
+                                mttf_hours=config_simples.get_mttf('pod')
+                            )
+                            self.components.append(pod_component)
+                            print(f"  ➕ Criado pod: {pod_name} (MTTF: {config_simples.get_mttf('pod')}h)")
+            else:
+                print(f"⚠️ Aviso: ConfigSimples define {len(worker_distribution)} workers, mas apenas {len(available_worker_nodes)} disponíveis")
+                print("   Aplicando configuração aos workers disponíveis...")
+        
+        # Aplicar MTTF do ConfigSimples aos demais componentes
+        for component in self.components:
+            if component.component_type == "pod":
+                component.mttf_hours = config_simples.get_mttf('pod')
+            elif component.component_type == "node":
+                component.mttf_hours = config_simples.get_mttf('worker_node')
+            elif component.component_type == "control_plane":
+                component.mttf_hours = config_simples.get_mttf('control_plane')
+            
+            print(f"  ✅ {component.name} ({component.component_type}): MTTF={component.mttf_hours}h")
+        
+        # Atualizar critérios de disponibilidade conforme ConfigSimples
+        if hasattr(config_simples, 'applications'):
+            self.availability_criteria = config_simples.get_availability_criteria()
+            print(f"🎯 Critérios de disponibilidade atualizados: {self.availability_criteria}")
+        
+        # Salvar referência do config_simples para usar posteriormente
+        self._config_simples = config_simples
+        print("✅ ConfigSimples aplicado com sucesso")
+        print(f"📊 Total de componentes após ConfigSimples: {len(self.components)}")
+    
+    def _save_config_simples_to_simulation_dir(self, simulation_base_dir: str):
+        """
+        Salva a configuração ConfigSimples no diretório da simulação.
+        
+        Args:
+            simulation_base_dir: Diretório base da simulação
+        """
+        if hasattr(self, '_config_simples'):
+            import os
+            config_file = os.path.join(simulation_base_dir, 'config_simples_used.json')
+            saved_file = self._config_simples.save_config(config_file)
+            print(f"💾 ConfigSimples salvo em: {saved_file}")
+            return saved_file
+        return None
+    
+    def _save_detailed_statistics(self, all_results: List[Dict], component_stats: Dict, config_data: Dict):
+        """
+        Salva CSVs detalhados com estatísticas por iteração e componente no diretório da simulação.
+        
+        Args:
+            all_results: Resultados de todas as iterações
+            component_stats: Estatísticas por componente
+            config_data: Configuração do experimento
+        """
+        import csv
+        import os
+        
+        # Obter diretório base da simulação do csv_reporter
+        simulation_base_dir = getattr(self.csv_reporter, '_simulation_base_dir', './simulation')
+        
+        # 1. CSV de estatísticas por iteração
+        iterations_filename = os.path.join(simulation_base_dir, 'experiment_iterations.csv')
+        try:
+            with open(iterations_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'iteration', 'duration_hours', 'availability_percentage', 
+                    'total_failures', 'total_available_time', 'total_downtime'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for i, result in enumerate(all_results, 1):
+                    total_downtime = sum(
+                        event.get('downtime_duration', 0) 
+                        for event in result.get('event_records', [])
+                    )
+                    
+                    writer.writerow({
+                        'iteration': i,
+                        'duration_hours': result['duration_hours'],
+                        'availability_percentage': result['availability_percentage'],
+                        'total_failures': result['total_failures'],
+                        'total_available_time': result['total_available_time'],
+                        'total_downtime': total_downtime
+                    })
+            
+            print(f"💾 Estatísticas por iteração salvas: {iterations_filename}")
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar estatísticas por iteração: {e}")
+        
+        # 2. CSV de estatísticas por componente
+        components_filename = os.path.join(simulation_base_dir, 'experiment_components.csv')
+        try:
+            with open(components_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'component_name', 'component_type', 'mttf_configured', 
+                    'failures_mean', 'failures_std', 'mttr_mean_seconds', 'mttr_std_seconds',
+                    'downtime_mean_hours', 'downtime_std_hours', 'observed_failure_rate',
+                    'total_failures', 'theoretical_failure_rate'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for comp_name, stats in component_stats.items():
+                    # Taxa teórica de falha (1/MTTF)
+                    theoretical_rate = 1/stats['mttf_configured'] if stats['mttf_configured'] > 0 else 0
+                    
+                    writer.writerow({
+                        'component_name': comp_name,
+                        'component_type': self._get_component_type(comp_name),
+                        'mttf_configured': stats['mttf_configured'],
+                        'failures_mean': stats['failures_mean'],
+                        'failures_std': stats['failures_std'],
+                        'mttr_mean_seconds': stats['mttr_mean'],
+                        'mttr_std_seconds': stats['mttr_std'],
+                        'downtime_mean_hours': stats['downtime_mean'],
+                        'downtime_std_hours': stats['downtime_std'],
+                        'observed_failure_rate': stats['observed_failure_rate'],
+                        'total_failures': stats['total_failures'],
+                        'theoretical_failure_rate': theoretical_rate
+                    })
+            
+            print(f"💾 Estatísticas por componente salvas: {components_filename}")
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar estatísticas por componente: {e}")
+        
+        # 3. CSV consolidado de todos os eventos
+        events_filename = os.path.join(simulation_base_dir, 'experiment_all_events.csv')
+        try:
+            all_events = []
+            for i, result in enumerate(all_results, 1):
+                for event in result.get('event_records', []):
+                    event_copy = event.copy()
+                    event_copy['iteration'] = i
+                    all_events.append(event_copy)
+            
+            if all_events:
+                with open(events_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = list(all_events[0].keys())
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(all_events)
+                
+                print(f"💾 Todos os eventos salvos: {events_filename}")
+            else:
+                print("⚠️ Nenhum evento para salvar")
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar todos os eventos: {e}")
+    
+    def _get_component_type(self, component_name: str) -> str:
+        """Busca o tipo de um componente pelo nome."""
+        for component in self.components:
+            if component.name == component_name:
+                return component.component_type
+        return 'unknown'
+    
+    def _verify_calculations(self, all_results: List[Dict], component_stats: Dict):
+        """
+        Verifica se os cálculos estão corretos.
+        
+        Args:
+            all_results: Resultados de todas as iterações
+            component_stats: Estatísticas por componente
+        """
+        print("🔍 Verificando consistência dos cálculos...")
+        
+        # Verificar disponibilidade
+        total_sim_time = len(all_results) * all_results[0]['duration_hours'] if all_results else 0
+        total_downtime = sum(
+            event.get('downtime_duration', 0)
+            for result in all_results
+            for event in result.get('event_records', [])
+        )
+        
+        expected_uptime = total_sim_time - total_downtime
+        expected_availability = (expected_uptime / total_sim_time * 100) if total_sim_time > 0 else 0
+        
+        calculated_avg = sum(r['availability_percentage'] for r in all_results) / len(all_results) if all_results else 0
+        
+        print(f"  ✅ Tempo simulado total: {total_sim_time:.2f}h")
+        print(f"  ✅ Downtime total: {total_downtime:.4f}h ({total_downtime*3600:.1f}s)")
+        print(f"  ✅ Uptime total: {expected_uptime:.4f}h")
+        print(f"  ✅ Disponibilidade calculada: {expected_availability:.2f}%")
+        print(f"  ✅ Disponibilidade média iterações: {calculated_avg:.2f}%")
+        
+        # Verificar MTTFs observados vs configurados
+        print(f"  📊 Verificação MTTF vs Observado:")
+        for comp_name, stats in component_stats.items():
+            if stats['total_failures'] > 0:
+                observed_mttf = total_sim_time / stats['total_failures']
+                configured_mttf = stats['mttf_configured']
+                diff_pct = abs(observed_mttf - configured_mttf) / configured_mttf * 100 if configured_mttf > 0 else 0
+                
+                print(f"    • {comp_name}:")
+                print(f"      - MTTF configurado: {configured_mttf:.1f}h")
+                print(f"      - MTTF observado: {observed_mttf:.1f}h")
+                print(f"      - Diferença: {diff_pct:.1f}%")
+        
+        print("✅ Verificação de cálculos concluída")
+    
+    def _handle_shutdown_worker_node(self, node_name: str) -> bool:
+        """
+        Lógica especial para shutdown de worker node.
+        
+        1. Desliga o nó
+        2. Aguarda 1 minuto REAL (fixo)
+        3. Religa o nó
+        4. Contabiliza MTTR configurado para estatísticas
+        """
+        try:
+            print(f"  🔌 Desligando worker node: {node_name}")
+            
+            # 1. Desligar o nó
+            shutdown_result = self.vm_injector.shutdown_worker_node(node_name)
+            if not shutdown_result.get('success', False):
+                print(f"  ❌ Falha ao desligar nó {node_name}")
+                return False
+            
+            # 2. Aguardar 1 minuto REAL (fixo, independente do MTTR configurado)
+            print(f"  ⏱️  Aguardando 1 minuto antes de religar...")
+            time.sleep(60)  # 1 minuto fixo
+            
+            # 3. Religar o nó
+            print(f"  🔌 Religando worker node: {node_name}")
+            startup_result = self.vm_injector.startup_worker_node(node_name)
+            
+            if startup_result.get('success', False):
+                print(f"  ✅ Worker node {node_name} religado com sucesso")
+                return True
+            else:
+                print(f"  ❌ Falha ao religar nó {node_name}")
+                return False
+                
+        except Exception as e:
+            print(f"  ❌ Erro durante shutdown/startup de {node_name}: {e}")
+            return False
+    
+    def _save_iteration_results(self, iteration: int, iteration_results: Dict):
+        """Salva resultados de uma iteração individual."""
+        try:
+            events = iteration_results.get('event_records', [])
+            if events:
+                # Preparar estatísticas da iteração
+                iteration_stats = {
+                    'iteration': iteration,
+                    'duration_hours': iteration_results.get('duration_hours', 0),
+                    'total_failures': len(events),
+                    'availability_percentage': iteration_results.get('availability_percentage', 0),
+                    'total_downtime': sum(event.get('downtime_duration', 0) for event in events),
+                    'mean_recovery_time': sum(event.get('recovery_time_seconds', 0) for event in events) / len(events) if events else 0
+                }
+                
+                # Salvar usando csv_reporter
+                self.csv_reporter.save_iteration_results(events, iteration_stats, iteration)
+            else:
+                print(f"⚠️ Nenhum evento registrado na iteração {iteration}")
+                
+        except Exception as e:
+            print(f"❌ Erro ao salvar iteração {iteration}: {e}")

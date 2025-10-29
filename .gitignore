@@ -1,8 +1,4 @@
-**.csv
-**.json
-
 .venv
-__pycache__
-backup
 
-plots
+**.csv
+**.png
