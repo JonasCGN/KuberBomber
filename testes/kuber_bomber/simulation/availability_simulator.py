@@ -13,6 +13,9 @@ import numpy as np
 import subprocess
 import json
 import requests
+import signal
+import sys
+import os
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -159,6 +162,14 @@ class AvailabilitySimulator:
         
         # Configurações
         self.real_delay_between_failures = 60  # 1 minuto em segundos
+        
+        # Controle de salvamento incremental
+        self.all_results = []  # Resultados de todas as iterações
+        self.current_iteration = 0
+        self.simulation_interrupted = False
+        
+        # Configurar handler para Ctrl+C
+        signal.signal(signal.SIGINT, self._handle_interrupt)
     
     def _discover_components(self) -> List[Component]:
         """
@@ -606,6 +617,348 @@ class AvailabilitySimulator:
         
         print(f"✅ {len(self.event_queue)} eventos iniciais criados\n")
     
+    def _handle_interrupt(self, signum, frame):
+        """
+        Handler para Ctrl+C - salva todos os arquivos necessários com dados parciais.
+        Gera os mesmos arquivos que uma simulação completa.
+        """
+        print(f"\n⏹️ Simulação interrompida pelo usuário")
+        print(f"💾 Salvando dados parciais nos arquivos padrão...")
+        
+        self.simulation_interrupted = True
+        
+        try:
+            # Garantir que temos um diretório de simulação com estrutura hierárquica
+            if not hasattr(self.csv_reporter, '_simulation_base_dir'):
+                from datetime import datetime
+                now = datetime.now()
+                year = now.strftime('%Y')
+                month = now.strftime('%m')
+                day = now.strftime('%d')
+                timestamp = now.strftime('%H%M%S')
+                
+                # Criar estrutura: simulation/YYYY/MM/DD/HHMMSS/
+                base_dir = os.path.join('./simulation', year, month, day, timestamp)
+                os.makedirs(base_dir, exist_ok=True)
+                self.csv_reporter._simulation_base_dir = base_dir
+            
+            simulation_dir = self.csv_reporter._simulation_base_dir
+            
+            # 1. config_simples_used.json
+            print("📄 Salvando config_simples_used.json...")
+            if hasattr(self, '_config_simples') and self._config_simples:
+                config_file = os.path.join(simulation_dir, 'config_simples_used.json')
+                try:
+                    self._config_simples.save_config(config_file)
+                    print(f"  ✅ {config_file}")
+                except Exception as e:
+                    print(f"  ⚠️ Erro ao salvar config_simples: {e}")
+            else:
+                print(f"  ⚠️ ConfigSimples não disponível")
+            
+            # 2. experiment_config.json  
+            print("� Salvando experiment_config.json...")
+            config_data = self._save_experiment_configuration_interrupt(self.all_results)
+            print(f"  ✅ {os.path.join(simulation_dir, 'experiment_config.json')}")
+            
+            # 3. experiment_iterations.csv
+            print("📄 Salvando experiment_iterations.csv...")
+            self._save_iterations_csv_interrupt(self.all_results)
+            print(f"  ✅ {os.path.join(simulation_dir, 'experiment_iterations.csv')}")
+            
+            # 4. experiment_components.csv  
+            print("📄 Salvando experiment_components.csv...")
+            component_stats = self._calculate_component_statistics(self.all_results)
+            self._save_components_csv_interrupt(component_stats)
+            print(f"  ✅ {os.path.join(simulation_dir, 'experiment_components.csv')}")
+            
+            # 5. experiment_all_events.csv
+            print("📄 Salvando experiment_all_events.csv...")
+            self._save_all_events_csv_interrupt(self.all_results)
+            print(f"  ✅ {os.path.join(simulation_dir, 'experiment_all_events.csv')}")
+            
+            # Verificar e informar sobre arquivos de tempo real já existentes
+            print(f"\n📋 Arquivos de tempo real (padrão ITERACAO{self.current_iteration}/):")
+            
+            iteration_dir = os.path.join(simulation_dir, f'ITERACAO{self.current_iteration}')
+            if os.path.exists(iteration_dir):
+                realtime_files = ['events.csv', 'statistics.csv']
+                
+                for filename in realtime_files:
+                    filepath = os.path.join(iteration_dir, filename)
+                    if os.path.exists(filepath):
+                        size = os.path.getsize(filepath)
+                        print(f"  ✅ ITERACAO{self.current_iteration}/{filename} ({size} bytes)")
+                    else:
+                        print(f"  ⚠️ ITERACAO{self.current_iteration}/{filename} (não encontrado)")
+            else:
+                print(f"  ⚠️ Diretório ITERACAO{self.current_iteration}/ não encontrado")
+            
+            print(f"\n✅ Todos os arquivos salvos com sucesso!")
+            print(f"📁 Diretório: {simulation_dir}")
+            print(f"📊 Iterações salvas: {len(self.all_results)}")
+            
+            # Mostrar estatísticas básicas
+            if self.all_results:
+                availabilities = [r['availability_percentage'] for r in self.all_results]
+                avg_availability = sum(availabilities) / len(availabilities)
+                total_failures = sum(r['total_failures'] for r in self.all_results)
+                print(f"📈 Disponibilidade média: {avg_availability:.2f}%")
+                print(f"💥 Total de falhas: {total_failures}")
+            
+            print(f"\n💡 Arquivos de tempo real salvam dados imediatamente após cada evento!")
+            print(f"📊 Use 'ITERACAO{self.current_iteration}/events.csv' para análise detalhada em tempo real")
+            print(f"📈 Use 'ITERACAO{self.current_iteration}/statistics.csv' para estatísticas atualizadas")
+            
+        except Exception as e:
+            print(f"❌ Erro ao salvar dados: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        sys.exit(0)
+    
+    def _save_event_incremental(self, event_record: Dict):
+        """
+        Salva evento individual no arquivo CSV incrementalmente.
+        
+        Args:
+            event_record: Dados do evento para salvar
+        """
+        try:
+            # Salvar no CSV de eventos individuais usando padrão ITERACAO{N}/events.csv
+            if hasattr(self.csv_reporter, '_simulation_base_dir'):
+                iteration_dir = os.path.join(self.csv_reporter._simulation_base_dir, f'ITERACAO{self.current_iteration}')
+                
+                # Criar diretório da iteração se não existir
+                os.makedirs(iteration_dir, exist_ok=True)
+                
+                events_file = os.path.join(iteration_dir, 'events.csv')
+                
+                # Verificar se arquivo existe para decidir se escrever header
+                file_exists = os.path.exists(events_file)
+                
+                with open(events_file, 'a', newline='', encoding='utf-8') as csvfile:
+                    import csv
+                    fieldnames = [
+                        'event_time_hours', 'real_time_seconds', 
+                        'component_type', 'component_name', 'failure_type',
+                        'recovery_time_seconds', 'system_available', 'available_pods',
+                        'required_pods', 'availability_percentage', 'downtime_duration', 'cumulative_downtime'
+                    ]
+                    
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    # Escrever header apenas se arquivo é novo
+                    if not file_exists:
+                        writer.writeheader()
+                    
+                    writer.writerow(event_record)
+                    
+                print(f"💾 Evento salvo: {event_record['failure_type']} em {event_record['component_name']}")
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar evento incremental: {e}")
+    
+    def _save_iteration_progress_realtime(self, current_time: float, total_available_time: float, duration_hours: float, events_count: int):
+        """
+        Salva progresso da iteração atual em tempo real no arquivo statistics.csv.
+        
+        Args:
+            current_time: Tempo simulado atual em horas
+            total_available_time: Tempo total disponível até agora
+            duration_hours: Duração total da iteração
+            events_count: Número de eventos processados até agora
+        """
+        try:
+            if hasattr(self.csv_reporter, '_simulation_base_dir'):
+                iteration_dir = os.path.join(self.csv_reporter._simulation_base_dir, f'ITERACAO{self.current_iteration}')
+                
+                # Criar diretório da iteração se não existir
+                os.makedirs(iteration_dir, exist_ok=True)
+                
+                statistics_file = os.path.join(iteration_dir, 'statistics.csv')
+                
+                # Calcular disponibilidade atual
+                current_availability = (total_available_time / current_time * 100) if current_time > 0 else 100.0
+                
+                # Calcular tempo médio de recuperação (se houver eventos)
+                mean_recovery_time = 0.0
+                total_downtime = current_time - total_available_time
+                
+                # Dados das estatísticas seguindo o padrão existente
+                statistics_data = [
+                    ('iteration', self.current_iteration),
+                    ('duration_hours', duration_hours),
+                    ('current_time_hours', current_time),
+                    ('total_failures', events_count),
+                    ('availability_percentage', current_availability),
+                    ('total_downtime', total_downtime),
+                    ('mean_recovery_time', mean_recovery_time)
+                ]
+                
+                # Reescrever arquivo completamente com dados atualizados
+                with open(statistics_file, 'w', newline='', encoding='utf-8') as csvfile:
+                    import csv
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['metric', 'value'])  # Header
+                    writer.writerows(statistics_data)
+                    
+                print(f"📊 Estatísticas atualizadas: {events_count} eventos, {current_availability:.1f}% disponibilidade")
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar progresso da iteração: {e}")
+    
+    def _save_iteration_incremental(self, iteration: int, iteration_results: Dict):
+        """
+        Salva resultados da iteração incrementalmente.
+        
+        Args:
+            iteration: Número da iteração
+            iteration_results: Dados da iteração
+        """
+        try:
+            # Salvar no CSV de iterações
+            if hasattr(self.csv_reporter, '_simulation_base_dir'):
+                iterations_file = os.path.join(self.csv_reporter._simulation_base_dir, 'iterations_incremental.csv')
+                
+                # Verificar se arquivo existe
+                file_exists = os.path.exists(iterations_file)
+                
+                with open(iterations_file, 'a', newline='', encoding='utf-8') as csvfile:
+                    import csv
+                    fieldnames = [
+                        'iteration', 'duration_hours', 'total_available_time',
+                        'availability_percentage', 'total_failures', 'timestamp'
+                    ]
+                    
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    # Escrever header apenas se arquivo é novo
+                    if not file_exists:
+                        writer.writeheader()
+                    
+                    # Dados da iteração
+                    row_data = {
+                        'iteration': iteration,
+                        'duration_hours': iteration_results['duration_hours'],
+                        'total_available_time': iteration_results['total_available_time'],
+                        'availability_percentage': iteration_results['availability_percentage'],
+                        'total_failures': iteration_results['total_failures'],
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                    writer.writerow(row_data)
+                    
+            print(f"💾 Iteração {iteration} salva incrementalmente")
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar iteração incremental: {e}")
+    
+    def _save_experiment_configuration_interrupt(self, all_results: List[Dict]) -> Dict:
+        """
+        Salva configuração do experimento durante interrupção.
+        """
+        return self._save_experiment_configuration(all_results)
+    
+    def _save_iterations_csv_interrupt(self, all_results: List[Dict]):
+        """
+        Salva CSV de iterações durante interrupção.
+        """
+        try:
+            simulation_dir = self.csv_reporter._simulation_base_dir
+            iterations_filename = os.path.join(simulation_dir, 'experiment_iterations.csv')
+            
+            import csv
+            with open(iterations_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'iteration', 'duration_hours', 'total_available_time',
+                    'availability_percentage', 'total_failures', 'timestamp'
+                ]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for i, result in enumerate(all_results, 1):
+                    writer.writerow({
+                        'iteration': i,
+                        'duration_hours': result['duration_hours'],
+                        'total_available_time': result['total_available_time'],
+                        'availability_percentage': result['availability_percentage'],
+                        'total_failures': result['total_failures'],
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar iterations CSV: {e}")
+    
+    def _save_components_csv_interrupt(self, component_stats: Dict):
+        """
+        Salva CSV de componentes durante interrupção.
+        """
+        try:
+            simulation_dir = self.csv_reporter._simulation_base_dir
+            components_filename = os.path.join(simulation_dir, 'experiment_components.csv')
+            
+            import csv
+            with open(components_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'component_name', 'component_type', 'mttf_configured',
+                    'failures_mean', 'failures_std', 'mttr_mean', 'mttr_std',
+                    'downtime_mean', 'downtime_std', 'observed_failure_rate',
+                    'total_failures'
+                ]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for comp_name, stats in component_stats.items():
+                    writer.writerow({
+                        'component_name': comp_name,
+                        'component_type': next((c.component_type for c in self.components if c.name == comp_name), 'unknown'),
+                        'mttf_configured': stats['mttf_configured'],
+                        'failures_mean': stats['failures_mean'],
+                        'failures_std': stats['failures_std'],
+                        'mttr_mean': stats['mttr_mean'],
+                        'mttr_std': stats['mttr_std'],
+                        'downtime_mean': stats['downtime_mean'],
+                        'downtime_std': stats['downtime_std'],
+                        'observed_failure_rate': stats['observed_failure_rate'],
+                        'total_failures': stats['total_failures']
+                    })
+                    
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar components CSV: {e}")
+    
+    def _save_all_events_csv_interrupt(self, all_results: List[Dict]):
+        """
+        Salva CSV de todos os eventos durante interrupção.
+        """
+        try:
+            simulation_dir = self.csv_reporter._simulation_base_dir
+            events_filename = os.path.join(simulation_dir, 'experiment_all_events.csv')
+            
+            import csv
+            with open(events_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'iteration', 'event_time_hours', 'real_time_seconds',
+                    'component_type', 'component_name', 'failure_type',
+                    'recovery_time_seconds', 'system_available', 'available_pods',
+                    'required_pods', 'availability_percentage', 'downtime_duration',
+                    'cumulative_downtime'
+                ]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for i, result in enumerate(all_results, 1):
+                    for event in result.get('event_records', []):
+                        event_row = dict(event)
+                        event_row['iteration'] = i
+                        writer.writerow(event_row)
+                        
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar events CSV: {e}")
+    
     def inject_failure(self, component: Component) -> bool:
         """
         Injeta falha no componente especificado.
@@ -653,8 +1006,14 @@ class AvailabilitySimulator:
                     success, _ = self.control_plane_injector.kill_kubelet(component.name)
                     print(f"  🎯 Falha injetada no node: {component.name} (kill kubelet)")
                 elif failure_method == "delete_kube_proxy":
-                    success, _ = self.control_plane_injector.delete_kube_proxy_pod(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (delete kube-proxy)")
+                    print(f"  🔄 Iniciando delete_kube_proxy para {component.name}...")
+                    success, command = self.control_plane_injector.delete_kube_proxy_pod(component.name)
+                    if success:
+                        print(f"  ✅ Falha injetada no node: {component.name} (delete kube-proxy)")
+                    else:
+                        print(f"  ⚠️ Falha parcial no node: {component.name} (delete kube-proxy) - continuando...")
+                        success = True  # Não parar simulação por falha no kube-proxy
+                    print(f"  🔄 Finalizou delete_kube_proxy para {component.name}")
                 elif failure_method == "restart_containerd":
                     success, _ = self.control_plane_injector.restart_containerd(component.name)
                     print(f"  🎯 Falha injetada no node: {component.name} (restart containerd)")
@@ -848,7 +1207,7 @@ class AvailabilitySimulator:
     
     def run_simulation(self, duration_hours: float = 24.0, iterations: int = 1):
         """
-        Executa simulação principal.
+        Executa simulação principal com salvamento incremental e suporte a Ctrl+C.
         
         Args:
             duration_hours: Duração da simulação em horas simuladas
@@ -865,46 +1224,77 @@ class AvailabilitySimulator:
             print(f"  • {app}: ≥{min_pods} pod(s)")
         print()
         
-        all_results = []
+        # Inicializar estrutura para salvamento incremental
+        self.all_results = []
         
-        for iteration in range(1, iterations + 1):
-            print(f"🔄 === ITERAÇÃO {iteration}/{iterations} ===")
+        # Garantir que o diretório de simulação seja criado com estrutura hierárquica
+        if not hasattr(self.csv_reporter, '_simulation_base_dir'):
+            from datetime import datetime
+            now = datetime.now()
+            year = now.strftime('%Y')
+            month = now.strftime('%m')
+            day = now.strftime('%d')
+            timestamp = now.strftime('%H%M%S')
             
-            # Resetar estado
-            self.current_simulated_time = 0.0
-            self.event_queue = []
-            self.availability_history = []
-            self.simulation_logs = []
-            
-            # Resetar componentes
-            for component in self.components:
-                component.current_status = 'healthy'
-                component.failure_count = 0
-                component.total_downtime = 0.0
-            
-            # Gerar eventos iniciais
-            self.initialize_events()
-            
-            # Executar simulação
-            iteration_results = self._run_single_iteration(duration_hours)
-            all_results.append(iteration_results)
-            
-            # Salvar CSV da iteração individual
-            self._save_iteration_results(iteration, iteration_results)
-            
-            print(f"✅ Iteração {iteration} concluída")
-            print(f"📈 Disponibilidade: {iteration_results['availability_percentage']:.2f}%")
-            print()
+            # Criar estrutura: simulation/YYYY/MM/DD/HHMMSS/
+            base_dir = os.path.join('./simulation', year, month, day, timestamp)
+            os.makedirs(base_dir, exist_ok=True)
+            self.csv_reporter._simulation_base_dir = base_dir
+            print(f"📁 Diretório de simulação: {base_dir}")
         
-        # Gerar relatório final
-        self._generate_final_report(all_results)
+        try:
+            for iteration in range(1, iterations + 1):
+                # Verificar se foi interrompido
+                if self.simulation_interrupted:
+                    break
+                    
+                print(f"🔄 === ITERAÇÃO {iteration}/{iterations} ===")
+                self.current_iteration = iteration
+                
+                # Resetar estado
+                self.current_simulated_time = 0.0
+                self.event_queue = []
+                self.availability_history = []
+                self.simulation_logs = []
+                
+                # Resetar componentes
+                for component in self.components:
+                    component.current_status = 'healthy'
+                    component.failure_count = 0
+                    component.total_downtime = 0.0
+                
+                # Gerar eventos iniciais
+                self.initialize_events()
+                
+                # Executar simulação
+                iteration_results = self._run_single_iteration(duration_hours, save_incremental=True)
+                self.all_results.append(iteration_results)
+                
+                # Salvar iteração incrementalmente
+                self._save_iteration_incremental(iteration, iteration_results)
+                
+                # Salvar CSV da iteração individual (método existente)
+                self._save_iteration_results(iteration, iteration_results)
+                
+                print(f"✅ Iteração {iteration} concluída")
+                print(f"📈 Disponibilidade: {iteration_results['availability_percentage']:.2f}%")
+                print()
+        
+        except KeyboardInterrupt:
+            # Já tratado pelo signal handler
+            return
+        
+        # Gerar relatório final apenas se não foi interrompido
+        if not self.simulation_interrupted:
+            self._generate_final_report(self.all_results)
     
-    def _run_single_iteration(self, duration_hours: float) -> Dict:
+    def _run_single_iteration(self, duration_hours: float, save_incremental: bool = False) -> Dict:
         """
-        Executa uma iteração da simulação.
+        Executa uma iteração da simulação com opção de salvamento incremental.
         
         Args:
             duration_hours: Duração em horas simuladas
+            save_incremental: Se True, salva eventos incrementalmente
             
         Returns:
             Resultados da iteração
@@ -986,6 +1376,18 @@ class AvailabilitySimulator:
                     'cumulative_downtime': next_event.component.total_downtime / 3600  # converter para horas
                 }
                 event_records.append(event_record)
+                
+                # Salvar evento incrementalmente se solicitado
+                if save_incremental:
+                    self._save_event_incremental(event_record)
+                    
+                    # Salvar progresso da iteração em tempo real
+                    self._save_iteration_progress_realtime(
+                        current_time=self.current_simulated_time,
+                        total_available_time=total_available_time,
+                        duration_hours=duration_hours,
+                        events_count=len(event_records)
+                    )
                 
                 print(f"📝 Evento registrado: {failure_method} em {next_event.component.name}")
                 

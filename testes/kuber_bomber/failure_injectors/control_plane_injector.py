@@ -238,19 +238,47 @@ class ControlPlaneInjector:
                 result = subprocess.run([
                     'kubectl', 'delete', 'pod', '-n', 'kube-system',
                     '-l', 'k8s-app=kube-proxy',
-                    '--field-selector', f'spec.nodeName={target}'
-                ], capture_output=True, text=True, check=True)
+                    '--field-selector', f'spec.nodeName={target}',
+                    '--force',  # Forçar remoção
+                    '--grace-period=0',  # Sem período de espera
+                    '--timeout=15s'  # Timeout mais curto
+                ], capture_output=True, text=True, timeout=20)  # Timeout do subprocess
             else:
                 result = subprocess.run([
                     'kubectl', 'delete', 'pod', '-n', 'kube-system',
-                    '-l', 'k8s-app=kube-proxy'
-                ], capture_output=True, text=True, check=True)
+                    '-l', 'k8s-app=kube-proxy',
+                    '--force',  # Forçar remoção
+                    '--grace-period=0',  # Sem período de espera
+                    '--timeout=15s'  # Timeout mais curto
+                ], capture_output=True, text=True, timeout=20)  # Timeout do subprocess
+            
+            # Verificar se houve erro no comando
+            if result.returncode != 0:
+                print(f"⚠️ Comando retornou código {result.returncode}")
+                print(f"   STDERR: {result.stderr}")
+                # Mesmo com erro, pode ter funcionado (ex: pod não encontrado ou já em terminating)
+                if any(msg in result.stderr.lower() for msg in ["not found", "terminating", "being deleted"]):
+                    print(f"ℹ️ Pod kube-proxy já está sendo removido ou não encontrado")
+                    return True, command
+                return False, command
             
             print(f"✅ kube-proxy pod(s) deletado(s) (DaemonSet irá recriar)")
             return True, command
             
+        except subprocess.TimeoutExpired:
+            print(f"⏰ Timeout: Comando demorou mais que 20s, continuando simulação...")
+            # Não considerar timeout como falha crítica
+            return True, command
         except subprocess.CalledProcessError as e:
-            print(f"❌ Erro: {e}")
+            print(f"❌ Erro no comando: {e}")
+            print(f"   STDERR: {e.stderr}")
+            # Verificar se é erro comum que pode ser ignorado
+            if e.stderr and any(msg in e.stderr.lower() for msg in ["not found", "terminating", "being deleted"]):
+                print(f"ℹ️ Erro ignorável - pod provavelmente já sendo removido")
+                return True, command
+            return False, command
+        except Exception as e:
+            print(f"❌ Erro inesperado: {e}")
             return False, command
     
     def restart_containerd(self, target: str) -> Tuple[bool, str]:
