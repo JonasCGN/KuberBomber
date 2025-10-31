@@ -1134,6 +1134,11 @@ class AvailabilitySimulator:
                         url_info = health_result.get('url_type', 'health check')
                         print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s ({url_info})")
                         component.current_status = 'healthy'
+                        
+                        # Aplicar limites de pods após recuperação de componente
+                        print(f"  🔍 Verificando limites de pods após recuperação de {component.name}...")
+                        self._monitor_and_enforce_pod_limits(verbose=False)
+                        
                         return recovery_time
                     
                     # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
@@ -1158,6 +1163,11 @@ class AvailabilitySimulator:
                         recovery_time = time.time() - start_time
                         print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (todas apps funcionando via HTTP)")
                         component.current_status = 'healthy'
+                        
+                        # Aplicar limites de pods após recuperação de node/control plane
+                        print(f"  🔍 Verificando limites de pods após recuperação de {component.name}...")
+                        self._monitor_and_enforce_pod_limits(verbose=False)
+                        
                         return recovery_time
                     else:
                         # Apps ainda não funcionando, verificar node status como informação adicional
@@ -1166,12 +1176,17 @@ class AvailabilitySimulator:
                         
                         print(f"  ⏳ Apps ainda recuperando (node: {node_status}): {', '.join(apps_status)}")
                         
-                        # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 2min, aceitar
-                        if node_ready and (time.time() - start_time) > 120:  # 2 minutos
-                            print(f"  ⚠️ FALLBACK: Node Ready há >2min mas apps não respondem HTTP")
+                        # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 10min, aceitar
+                        if node_ready and (time.time() - start_time) > 600:  # 10 minutos
+                            print(f"  ⚠️ FALLBACK: Node Ready há >10min mas apps não respondem HTTP")
                             recovery_time = time.time() - start_time
                             print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (fallback: node Ready)")
                             component.current_status = 'healthy'
+                            
+                            # Aplicar limites de pods após fallback de recuperação
+                            print(f"  🔍 Verificando limites de pods após fallback de {component.name}...")
+                            self._monitor_and_enforce_pod_limits(verbose=False)
+                            
                             return recovery_time
                 
                 time.sleep(check_interval)
@@ -1299,6 +1314,10 @@ class AvailabilitySimulator:
         Returns:
             Resultados da iteração
         """
+        # Aplicar limites de pods no início da iteração
+        print(f"🔍 Verificando limites de pods no início da iteração {self.current_iteration}...")
+        self._monitor_and_enforce_pod_limits(verbose=True)
+        
         start_real_time = time.time()
         total_available_time = 0.0
         last_check_time = 0.0
@@ -1722,6 +1741,43 @@ class AvailabilitySimulator:
         self._config_simples = config_simples
         print("✅ ConfigSimples aplicado com sucesso (mantendo pods reais)")
         print(f"📊 Total de componentes: {len(self.components)}")
+    
+    def _monitor_and_enforce_pod_limits(self, verbose: bool = False):
+        """
+        Monitora e aplica limites de pods durante a simulação.
+        
+        Args:
+            verbose: Se True, exibe informações detalhadas
+        """
+        if not hasattr(self, 'pod_limiter') or self.pod_limiter is None:
+            if verbose:
+                print("⚠️ PodLimiter não disponível")
+            return
+            
+        try:
+            status = self.pod_limiter.check_pod_limits()
+            violations = []
+            
+            for worker_name, worker_status in status.items():
+                if not worker_status['within_limit']:
+                    violations.append(worker_name)
+                    if verbose:
+                        print(f"🚨 Limite violado em {worker_name}: {worker_status['app_pods']} > {worker_status['limit']}")
+            
+            if violations:
+                print(f"🚫 Aplicando limites em {len(violations)} worker(s): {violations}")
+                limit_results = self.pod_limiter.enforce_pod_limits()
+                
+                for worker, success in limit_results.items():
+                    if success:
+                        print(f"  ✅ Limites aplicados em {worker}")
+                    else:
+                        print(f"  ❌ Falha ao aplicar limites em {worker}")
+            elif verbose:
+                print(f"✅ Todos os workers respeitam os limites de pods")
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao monitorar limites de pods: {e}")
     
     def _save_config_simples_to_simulation_dir(self, simulation_base_dir: str):
         """

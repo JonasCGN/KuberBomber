@@ -41,7 +41,42 @@ class PodLimiter:
             # Se for int, todos os workers têm o mesmo limite
             return int(self.config_simples.worker_nodes_config)
     
-    def get_current_pods_on_node(self, node_name: str) -> Tuple[List[str], List[str]]:
+    def _discover_application_names(self) -> set:
+        """
+        Descobre automaticamente os nomes das aplicações baseado nos pods no namespace default.
+        
+        Returns:
+            Set com nomes das aplicações descobertas
+        """
+        try:
+            # Obter pods do namespace default
+            cmd = ['kubectl', 'get', 'pods', '-n', 'default', '-o', 'json']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                print(f"❌ Erro ao obter pods do namespace default: {result.stderr}")
+                return set()
+            
+            pods_data = json.loads(result.stdout)
+            discovered_apps = set()
+            
+            for pod in pods_data.get('items', []):
+                pod_name = pod['metadata']['name']
+                
+                # Extrair nome da aplicação do pod (ex: "bar-app" de "bar-app-6664549c89-n7kz2")
+                if '-' in pod_name:
+                    app_name = pod_name.split('-')[0] + '-app'  # Assumindo padrão "app-name-hash-id"
+                    if app_name.endswith('-app-app'):  # Evitar duplicação de "-app"
+                        app_name = app_name[:-4]  # Remove o "-app" extra
+                    discovered_apps.add(app_name)
+                    
+            return discovered_apps
+            
+        except Exception as e:
+            print(f"❌ Erro ao descobrir aplicações: {e}")
+            return set()
+
+    def get_current_pods_on_node(self, node_name: str) -> Tuple[List[str], List[Dict]]:
         """
         Obtém pods atuais em um worker node, separando sistema e aplicação.
         
@@ -49,7 +84,8 @@ class PodLimiter:
             node_name: Nome do worker node
             
         Returns:
-            Tuple com (pods_sistema, pods_aplicacao)
+            Tuple com (pods_sistema, pods_aplicacao_com_namespace)
+            onde pods_aplicacao_com_namespace é lista de dicts com {'name': str, 'namespace': str}
         """
         try:
             # Obter todos os pods do nó
@@ -70,19 +106,36 @@ class PodLimiter:
             system_pods = []
             app_pods = []
             
+            # Namespaces de sistema - EXCLUINDO 'default' que contém as aplicações
             system_namespaces = {
                 'kube-system', 'kube-public', 'kube-node-lease',
-                'local-path-storage', 'metallb-system', 'default'
+                'local-path-storage', 'metallb-system', 'ingress-nginx',
+                'kubernetes-dashboard', 'monitoring'
             }
+            
+            # Descobrir aplicações automaticamente
+            discovered_apps = self._discover_application_names()
             
             for pod in pods_data.get('items', []):
                 pod_name = pod['metadata']['name']
                 namespace = pod['metadata']['namespace']
                 
-                if namespace in system_namespaces:
+                # Pods de aplicação são aqueles no namespace 'default' 
+                # que correspondem às aplicações descobertas automaticamente
+                if namespace == 'default':
+                    # Verificar se é uma aplicação real baseado na descoberta automática
+                    is_application = any(app_name in pod_name for app_name in discovered_apps)
+                    
+                    if is_application:
+                        app_pods.append({'name': pod_name, 'namespace': namespace})
+                    else:
+                        system_pods.append(pod_name)
+                elif namespace in system_namespaces:
                     system_pods.append(pod_name)
                 else:
-                    app_pods.append(pod_name)
+                    # Qualquer outro namespace que não seja sistema é considerado aplicação
+                    # mas priorizamos os pods do 'default' que são as aplicações reais
+                    system_pods.append(pod_name)
                     
             return system_pods, app_pods
             
@@ -103,6 +156,9 @@ class PodLimiter:
             limit = self.get_node_pod_limit(worker_name)
             system_pods, app_pods = self.get_current_pods_on_node(worker_name)
             
+            # Extrair apenas nomes para compatibilidade
+            app_pod_names = [pod['name'] if isinstance(pod, dict) else pod for pod in app_pods]
+            
             status[worker_name] = {
                 'limit': limit,
                 'system_pods': len(system_pods),
@@ -110,7 +166,8 @@ class PodLimiter:
                 'total_pods': len(system_pods) + len(app_pods),
                 'within_limit': len(app_pods) <= limit,
                 'system_pod_names': system_pods,
-                'app_pod_names': app_pods
+                'app_pod_names': app_pod_names,
+                'app_pods_with_namespace': app_pods  # Manter info completa
             }
             
         return status
@@ -128,19 +185,55 @@ class PodLimiter:
         for worker_name, worker_status in status.items():
             if not worker_status['within_limit']:
                 # Remover pods em excesso
-                excess_count = len(worker_status['app_pod_names']) - worker_status['limit']
-                pods_to_remove = worker_status['app_pod_names'][:excess_count]
+                excess_count = len(worker_status['app_pods_with_namespace']) - worker_status['limit']
+                pods_to_remove = worker_status['app_pods_with_namespace'][:excess_count]
                 
-                print(f"🚫 Worker {worker_name}: {len(worker_status['app_pod_names'])} pods > limite {worker_status['limit']}")
-                print(f"   Removendo {excess_count} pods: {pods_to_remove}")
+                print(f"🚫 Worker {worker_name}: {len(worker_status['app_pods_with_namespace'])} pods > limite {worker_status['limit']}")
+                pod_names = [pod['name'] if isinstance(pod, dict) else pod for pod in pods_to_remove]
+                print(f"   Removendo {excess_count} pods: {pod_names}")
                 
-                removal_success = self._remove_pods(pods_to_remove)
+                removal_success = self._remove_pods_with_namespace(pods_to_remove)
                 results[worker_name] = removal_success
             else:
-                print(f"✅ Worker {worker_name}: {len(worker_status['app_pod_names'])} pods <= limite {worker_status['limit']}")
+                print(f"✅ Worker {worker_name}: {len(worker_status['app_pods_with_namespace'])} pods <= limite {worker_status['limit']}")
                 results[worker_name] = True
                 
         return results
+    
+    def _remove_pods_with_namespace(self, pods_with_namespace: List[Dict]) -> bool:
+        """
+        Remove uma lista de pods usando informação de namespace.
+        
+        Args:
+            pods_with_namespace: Lista de dicts com 'name' e 'namespace'
+            
+        Returns:
+            True se todos os pods foram removidos com sucesso
+        """
+        try:
+            for pod_info in pods_with_namespace:
+                if isinstance(pod_info, dict):
+                    pod_name = pod_info['name']
+                    namespace = pod_info['namespace']
+                else:
+                    # Fallback para strings simples
+                    pod_name = pod_info
+                    namespace = 'default'
+                
+                # Deletar o pod
+                delete_cmd = ['kubectl', 'delete', 'pod', pod_name, '-n', namespace, '--force', '--grace-period=0']
+                delete_result = subprocess.run(delete_cmd, capture_output=True, text=True, timeout=30)
+                
+                if delete_result.returncode == 0:
+                    print(f"  ✅ Pod {pod_name} (namespace: {namespace}) removido")
+                else:
+                    print(f"  ❌ Falha ao remover pod {pod_name}: {delete_result.stderr}")
+                    
+            return True
+            
+        except Exception as e:
+            print(f"❌ Erro ao remover pods: {e}")
+            return False
     
     def _remove_pods(self, pod_names: List[str]) -> bool:
         """
