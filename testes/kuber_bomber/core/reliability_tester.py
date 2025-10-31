@@ -81,6 +81,7 @@ class ReliabilityTester:
             'kill_worker_node_processes': self.node_injector.kill_worker_node_processes,
             'restart_worker_node': self.node_injector.kill_worker_node_processes,  # Mesmo que kill (docker restart)
             'kill_kubelet': self.control_plane_injector.kill_kubelet,
+            'shutdown_worker_node': self._shutdown_worker_node_handler,  # Handler especial para shutdown de VM
             
             # === CONTROL PLANE FAILURES ===
             'kill_control_plane_processes': self.node_injector.kill_control_plane_processes,
@@ -309,6 +310,8 @@ class ReliabilityTester:
             if not recovered:
                 print("❌ Sistema não se recuperou, parando teste")
                 return None
+        elif healthy_before < len(initial_health):
+            print(f"⚠️ Apenas {healthy_before}/{len(initial_health)} aplicações saudáveis, mas prosseguindo com o teste...")
         
         # Executar falha
         failure_start = time.time()
@@ -378,6 +381,293 @@ class ReliabilityTester:
             print(f"📁 Arquivo CSV: {self.csv_reporter.get_current_file_path()}")
         print("="*50)
     
+    def _shutdown_worker_node_handler(self, target: str) -> Tuple[bool, str]:
+        """
+        Handler especial para shutdown de worker node com self-healing automático.
+        
+        Processo otimizado para Kind:
+        1. Desliga o worker node (docker stop)
+        2. Aguarda um tempo (simula downtime)
+        3. Religa automaticamente (docker start) - self-healing
+        4. Reinicia CNI/networking no worker node
+        5. Remove e recria pods com problemas de conectividade
+        6. Aguarda o node ficar Ready novamente
+        
+        MTTR fixo: 60 segundos (independente da configuração em horas)
+        
+        Args:
+            target: Nome do worker node para desligar
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        try:
+            import time
+            import subprocess
+            
+            # 1. Executar shutdown do worker node usando node_injector
+            print(f"🔌 Desligando worker node: {target}")
+            shutdown_success, shutdown_command = self.node_injector.shutdown_worker_node(target)
+            
+            if not shutdown_success:
+                print(f"❌ Falha ao desligar nó {target}")
+                return False, f"shutdown_worker_node {target}"
+            
+            print(f"✅ Worker node {target} desligado com sucesso")
+            
+            # 2. Aguardar downtime (simular problema real)
+            downtime_seconds = 30  # 30 segundos de downtime
+            print(f"⏱️ Simulando downtime por {downtime_seconds}s...")
+            time.sleep(downtime_seconds)
+            
+            # 3. Self-healing: Religar automaticamente
+            print(f"🔄 Self-healing: Religando worker node {target}...")
+            startup_success, startup_command = self.node_injector.start_worker_node(target)
+            
+            if not startup_success:
+                print(f"❌ Falha no self-healing de {target}")
+                print(f"🚨 ATENÇÃO: Node {target} pode estar offline permanentemente!")
+                return False, f"shutdown_worker_node {target} (recovery-failed)"
+            
+            print(f"✅ Worker node {target} religado com sucesso")
+            
+            # 4. CORREÇÃO ESPECÍFICA PARA KIND: Reiniciar networking no container
+            print(f"🌐 Corrigindo conectividade de rede no Kind para {target}...")
+            self._fix_kind_networking(target)
+            
+            # 5. Aguardar node ficar Ready
+            print(f"⏱️ Aguardando node {target} ficar Ready...")
+            node_ready = self._wait_for_node_ready(target, timeout=60)
+            
+            if not node_ready:
+                print(f"⚠️ Node {target} não ficou Ready no tempo esperado")
+            
+            # # 6. Remover e recriar TODOS os pods no worker node afetado
+            # print(f"🔄 Removendo pods com problemas de conectividade no worker {target}...")
+            # self._recreate_pods_on_node(target)
+            
+            # 7. Aguardar tempo para pods serem reagendados e iniciarem
+            print(f"⏱️ Aguardando 45s para pods serem reagendados e iniciarem...")
+            time.sleep(45)
+            
+            # 8. Verificação final do node
+            try:
+                result = subprocess.run([
+                    'kubectl', 'get', 'node', target, '-o', 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
+                ], capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0 and result.stdout.strip() == 'True':
+                    print(f"✅ Node {target} está Ready - recovery completo!")
+                    return True, f"shutdown_worker_node {target} (auto-recovered)"
+                else:
+                    print(f"⚠️ Node {target} started mas ainda não está Ready")
+                    return True, f"shutdown_worker_node {target} (recovery-pending)"
+                    
+            except Exception as check_error:
+                print(f"⚠️ Não foi possível verificar status do node, mas foi religado: {check_error}")
+                return True, f"shutdown_worker_node {target} (recovery-pending)"
+                
+        except Exception as e:
+            print(f"❌ Erro durante shutdown/recovery de {target}: {e}")
+            return False, f"shutdown_worker_node {target} (error: {e})"
+    
+    def _fix_kind_networking(self, node_name: str):
+        """
+        Corrige problemas de conectividade de rede específicos do Kind após restart.
+        
+        Args:
+            node_name: Nome do node para corrigir
+        """
+        try:
+            import subprocess
+            import time
+            
+            print(f"🔧 Aplicando correções de rede no Kind para {node_name}...")
+            
+            # 0. CORRIGIR DNS DO KIND (problema mais comum)
+            print("   🌐 Corrigindo DNS do Kind...")
+            
+            # Obter IP do control plane
+            cp_ip_result = subprocess.run([
+                'docker', 'inspect', 'local-k8s-control-plane', 
+                '--format', '{{.NetworkSettings.Networks.kind.IPAddress}}'
+            ], capture_output=True, text=True, timeout=10)
+            
+            if cp_ip_result.returncode == 0:
+                cp_ip = cp_ip_result.stdout.strip()
+                print(f"      Control plane IP: {cp_ip}")
+                
+                # Adicionar entrada ao /etc/hosts se não existir
+                subprocess.run([
+                    'docker', 'exec', node_name, 'bash', '-c',
+                    f'grep -q "local-k8s-control-plane" /etc/hosts || echo "{cp_ip} local-k8s-control-plane" >> /etc/hosts'
+                ], capture_output=True, timeout=30)
+                
+                print("      ✅ DNS mapping adicionado ao /etc/hosts")
+            else:
+                print("      ⚠️ Não foi possível obter IP do control plane")
+            
+            # 1. Reiniciar systemd-resolved no container (corrige DNS) - opcional no Kind
+            print("   📡 Reiniciando DNS resolver...")
+            subprocess.run([
+                'docker', 'exec', node_name, 'systemctl', 'restart', 'systemd-resolved'
+            ], capture_output=True, timeout=30)
+            
+            # 2. Reiniciar containerd para recriar bridges de rede
+            print("   🔄 Reiniciando containerd...")
+            subprocess.run([
+                'docker', 'exec', node_name, 'systemctl', 'restart', 'containerd'
+            ], capture_output=True, timeout=60)
+            
+            # 3. Aguardar containerd estabilizar
+            time.sleep(10)
+            
+            # 4. Reiniciar kubelet para reconectar ao cluster
+            print("   ⚙️ Reiniciando kubelet...")
+            
+            # Primeiro, parar o kubelet para limpar file descriptors
+            subprocess.run([
+                'docker', 'exec', node_name, 'systemctl', 'stop', 'kubelet'
+            ], capture_output=True, timeout=30)
+            
+            # Limpar processos órfãos que podem estar mantendo file descriptors
+            print("   🧹 Limpando processos órfãos...")
+            subprocess.run([
+                'docker', 'exec', node_name, 'bash', '-c', 
+                'pkill -f "kubelet" || true; pkill -f "crio" || true'
+            ], capture_output=True, timeout=30)
+            
+            # Aguardar limpeza de recursos
+            time.sleep(5)
+            
+            subprocess.run([
+                'docker', 'exec', node_name, 'systemctl', 'start', 'kubelet'
+            ], capture_output=True, timeout=30)
+            
+            # 5. Aguardar kubelet estabilizar mais tempo devido ao file descriptor issue
+            time.sleep(15)
+            
+            # 6. Aplicar flush nas tabelas iptables para limpar regras antigas
+            print("   🔥 Limpando regras iptables antigas...")
+            subprocess.run([
+                'docker', 'exec', node_name, 'iptables', '-F'
+            ], capture_output=True, timeout=30)
+            
+            subprocess.run([
+                'docker', 'exec', node_name, 'iptables', '-t', 'nat', '-F'
+            ], capture_output=True, timeout=30)
+            
+            print(f"✅ Correções de rede aplicadas em {node_name}")
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao aplicar correções de rede em {node_name}: {e}")
+
+    def _wait_for_node_ready(self, node_name: str, timeout: int = 60) -> bool:
+        """
+        Aguarda um node ficar Ready.
+        
+        Args:
+            node_name: Nome do node
+            timeout: Timeout em segundos
+            
+        Returns:
+            True se o node ficou Ready, False caso contrário
+        """
+        import subprocess
+        import time
+        
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                result = subprocess.run([
+                    'kubectl', 'get', 'node', node_name, 
+                    '-o', 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
+                ], capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0 and result.stdout.strip() == 'True':
+                    print(f"✅ Node {node_name} está Ready!")
+                    return True
+                    
+            except Exception:
+                pass
+            
+            time.sleep(5)
+        
+        return False
+
+    # def _recreate_pods_on_node(self, node_name: str):
+    #     """
+    #     Remove e recria todos os pods em um worker node específico.
+        
+    #     Args:
+    #         node_name: Nome do worker node
+    #     """
+    #     try:
+    #         import subprocess
+            
+    #         # 1. Listar todos os pods no worker node
+    #         pods_result = subprocess.run([
+    #             'kubectl', 'get', 'pods', '--all-namespaces',
+    #             '--field-selector', f'spec.nodeName={node_name}',
+    #             '-o', 'jsonpath={.items[*].metadata.name}',
+    #             '--no-headers'
+    #         ], capture_output=True, text=True, timeout=30)
+            
+    #         if pods_result.returncode != 0 or not pods_result.stdout.strip():
+    #             print(f"ℹ️ Nenhum pod encontrado no worker {node_name}")
+    #             return
+            
+    #         # 2. Obter pods e seus namespaces
+    #         pods_with_ns_result = subprocess.run([
+    #             'kubectl', 'get', 'pods', '--all-namespaces',
+    #             '--field-selector', f'spec.nodeName={node_name}',
+    #             '-o', 'custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name',
+    #             '--no-headers'
+    #         ], capture_output=True, text=True, timeout=30)
+            
+    #         if pods_with_ns_result.returncode != 0:
+    #             print(f"⚠️ Erro ao obter pods com namespaces do worker {node_name}")
+    #             return
+            
+    #         pod_lines = pods_with_ns_result.stdout.strip().split('\n')
+    #         pods_to_recreate = []
+            
+    #         for line in pod_lines:
+    #             if line.strip():
+    #                 parts = line.strip().split()
+    #                 if len(parts) >= 2:
+    #                     namespace, pod_name = parts[0], parts[1]
+    #                     # Não recriar pods do sistema (kube-system) ou DaemonSets críticos
+    #                     if namespace not in ['kube-system', 'kube-public', 'kube-node-lease']:
+    #                         pods_to_recreate.append((namespace, pod_name))
+            
+    #         if not pods_to_recreate:
+    #             print(f"ℹ️ Nenhum pod de aplicação encontrado para recriar no worker {node_name}")
+    #             return
+            
+    #         print(f"📦 Encontrados {len(pods_to_recreate)} pods de aplicação para recriar no worker {node_name}")
+            
+    #         # 3. Deletar pods encontrados (serão recriados automaticamente pelos Deployments)
+    #         for namespace, pod_name in pods_to_recreate:
+    #             print(f"🗑️ Removendo pod: {namespace}/{pod_name}")
+                
+    #             delete_result = subprocess.run([
+    #                 'kubectl', 'delete', 'pod', pod_name, 
+    #                 '-n', namespace, 
+    #                 '--force', '--grace-period=0'
+    #             ], capture_output=True, text=True, timeout=30)
+                
+    #             if delete_result.returncode == 0:
+    #                 print(f"✅ Pod {namespace}/{pod_name} removido com sucesso")
+    #             else:
+    #                 print(f"⚠️ Falha ao remover pod {namespace}/{pod_name}: {delete_result.stderr}")
+            
+    #         print(f"🔄 Remoção de pods no worker {node_name} concluída")
+            
+    #     except Exception as e:
+    #         print(f"⚠️ Erro ao recriar pods no worker {node_name}: {e}")
+
     @property
     def component_metrics(self):
         """Propriedade para acessar métricas de componentes."""

@@ -22,6 +22,7 @@ from ..failure_injectors.node_injector import NodeFailureInjector
 from ..failure_injectors.control_plane_injector import ControlPlaneInjector
 from ..monitoring.health_checker import HealthChecker
 from ..reports.csv_reporter import CSVReporter
+from ..utils.pod_limiter import PodLimiter
 
 
 @dataclass
@@ -50,7 +51,7 @@ class Component:
                     "kill_kubelet",
                     "delete_kube_proxy",
                     "restart_containerd",
-                    "shutdown_worker_node"  # Adicionar shutdown de VM
+                    # "shutdown_worker_node" 
                 ]
             elif self.component_type == "control_plane":
                 self.available_failure_methods = [
@@ -144,12 +145,11 @@ class AvailabilitySimulator:
         self.node_injector = NodeFailureInjector()
         self.control_plane_injector = ControlPlaneInjector()
         
-        # Importar VM injector para shutdown de nodes
-        from ..failure_injectors.vm_injector import VmFailureInjector
-        self.vm_injector = VmFailureInjector()
-        
         # Reporter CSV
         self.csv_reporter = CSVReporter()
+        
+        # Limitador de pods (será configurado se usar ConfigSimples)
+        self.pod_limiter = None
         
         # Estado da simulação
         self.current_simulated_time = 0.0  # horas simuladas
@@ -587,6 +587,10 @@ class AvailabilitySimulator:
         # Distribuição exponencial
         time_until_failure = np.random.exponential(1.0 / failure_rate)
         
+        # Debug: mostrar cálculo apenas para primeiros componentes
+        if len(self.components) <= 7:  # Evitar spam de debug
+            print(f"  🎲 {component.name}: MTTF={component.mttf_hours}h → λ={failure_rate:.6f} → próxima={time_until_failure:.1f}h")
+        
         return self.current_simulated_time + time_until_failure
     
     def initialize_events(self):
@@ -1009,7 +1013,7 @@ class AvailabilitySimulator:
         print(f"  • Tempo indisponível: {duration_hours - total_available_time:.3f}h")
         
         # Calcular disponibilidade final
-        availability_percentage = (total_available_time / duration_hours) * 100 if duration_hours > 0 else 0
+        availability_percentage = (total_available_time / duration_hours) * 100 if duration_hours > 0 else 0.0
         
         return {
             'duration_hours': duration_hours,
@@ -1238,61 +1242,50 @@ class AvailabilitySimulator:
     def _apply_config_simples(self, config_simples):
         """
         Aplica configuração do ConfigSimples aos componentes descobertos.
-        Descobre worker nodes disponíveis e cria pods conforme distribuição especificada.
+        Mantém os pods reais descobertos e apenas aplica MTTFs, em vez de criar pods fictícios.
         
         Args:
             config_simples: Instância do ConfigSimples
         """
         print("🔧 Aplicando ConfigSimples aos componentes descobertos...")
         
-        # Descobrir worker nodes disponíveis
+        # Armazenar referência para uso em outros métodos
+        self._config_simples = config_simples
+        
+        # Inicializar limitador de pods
+        self.pod_limiter = PodLimiter(config_simples)
+        print("📊 Limitador de pods inicializado")
+        
+        # Aplicar limites de pods imediatamente
+        self.pod_limiter.print_pod_status()
+        print("🚫 Aplicando limites de pods...")
+        limit_results = self.pod_limiter.enforce_pod_limits()
+        
+        for worker, success in limit_results.items():
+            if success:
+                print(f"✅ Limites aplicados em {worker}")
+            else:
+                print(f"❌ Falha ao aplicar limites em {worker}")
+        
+        # Descobrir worker nodes e pods reais disponíveis
         available_worker_nodes = []
         control_plane_nodes = []
+        real_pods = []
         
         for component in self.components:
             if component.component_type == "node":
                 available_worker_nodes.append(component.name)
             elif component.component_type == "control_plane":
                 control_plane_nodes.append(component.name)
+            elif component.component_type == "pod":
+                real_pods.append(component.name)
         
         print(f"📋 Worker nodes disponíveis descobertos: {available_worker_nodes}")
         print(f"📋 Control plane nodes descobertos: {control_plane_nodes}")
+        print(f"📋 Pods reais descobertos: {real_pods}")
         
-        # Verificar se ConfigSimples tem configuração de distribuição
-        if hasattr(config_simples, 'worker_nodes_config') and isinstance(config_simples.worker_nodes_config, dict):
-            worker_distribution = config_simples.worker_nodes_config
-            print(f"📊 Distribuição ConfigSimples: {worker_distribution}")
-            
-            # Mapear worker nodes disponíveis para a configuração
-            if len(available_worker_nodes) >= len(worker_distribution):
-                # Temos worker nodes suficientes - usar os disponíveis
-                worker_mapping = {}
-                for i, (config_worker, pod_count) in enumerate(worker_distribution.items()):
-                    if i < len(available_worker_nodes):
-                        actual_worker = available_worker_nodes[i]
-                        worker_mapping[actual_worker] = pod_count
-                        print(f"  🔗 Mapeando {config_worker} → {actual_worker}: {pod_count} pods")
-                
-                # Remover pods existentes que não seguem a nova distribuição
-                self.components = [c for c in self.components if c.component_type != "pod"]
-                
-                # Criar novos pods conforme distribuição
-                for worker_name, pod_count in worker_mapping.items():
-                    for app in config_simples.applications:
-                        for pod_idx in range(pod_count):
-                            pod_name = f"{app}-{pod_idx+1}-{worker_name}"
-                            pod_component = Component(
-                                name=pod_name,
-                                component_type="pod",
-                                mttf_hours=config_simples.get_mttf('pod')
-                            )
-                            self.components.append(pod_component)
-                            print(f"  ➕ Criado pod: {pod_name} (MTTF: {config_simples.get_mttf('pod')}h)")
-            else:
-                print(f"⚠️ Aviso: ConfigSimples define {len(worker_distribution)} workers, mas apenas {len(available_worker_nodes)} disponíveis")
-                print("   Aplicando configuração aos workers disponíveis...")
-        
-        # Aplicar MTTF do ConfigSimples aos demais componentes
+        # MANTER OS PODS REAIS - não criar pods fictícios
+        # Apenas aplicar MTTF do ConfigSimples aos componentes existentes
         for component in self.components:
             if component.component_type == "pod":
                 component.mttf_hours = config_simples.get_mttf('pod')
@@ -1303,15 +1296,30 @@ class AvailabilitySimulator:
             
             print(f"  ✅ {component.name} ({component.component_type}): MTTF={component.mttf_hours}h")
         
-        # Atualizar critérios de disponibilidade conforme ConfigSimples
-        if hasattr(config_simples, 'applications'):
-            self.availability_criteria = config_simples.get_availability_criteria()
-            print(f"🎯 Critérios de disponibilidade atualizados: {self.availability_criteria}")
+        # Extrair nomes das aplicações dos pods reais para critérios de disponibilidade
+        discovered_apps = set()
+        for pod_name in real_pods:
+            # Extrair nome da aplicação do pod (ex: "bar-app" de "bar-app-6664549c89-n7kz2")
+            if '-' in pod_name:
+                app_name = pod_name.split('-')[0] + '-app'  # Assumindo padrão "app-name-hash-id"
+                if app_name.endswith('-app-app'):  # Evitar duplicação de "-app"
+                    app_name = app_name[:-4]  # Remove o "-app" extra
+                discovered_apps.add(app_name)
+        
+        # Usar aplicações descobertas dos pods reais em vez das fictícias do ConfigSimples
+        if discovered_apps:
+            self.availability_criteria = {app: 1 for app in discovered_apps}
+            print(f"🎯 Critérios de disponibilidade baseados nos pods reais: {self.availability_criteria}")
+        else:
+            # Fallback para configuração do ConfigSimples se não conseguir descobrir
+            if hasattr(config_simples, 'applications'):
+                self.availability_criteria = config_simples.get_availability_criteria()
+                print(f"🎯 Critérios de disponibilidade (fallback ConfigSimples): {self.availability_criteria}")
         
         # Salvar referência do config_simples para usar posteriormente
         self._config_simples = config_simples
-        print("✅ ConfigSimples aplicado com sucesso")
-        print(f"📊 Total de componentes após ConfigSimples: {len(self.components)}")
+        print("✅ ConfigSimples aplicado com sucesso (mantendo pods reais)")
+        print(f"📊 Total de componentes: {len(self.components)}")
     
     def _save_config_simples_to_simulation_dir(self, simulation_base_dir: str):
         """
@@ -1488,28 +1496,40 @@ class AvailabilitySimulator:
         Lógica especial para shutdown de worker node.
         
         1. Desliga o nó
-        2. Aguarda 1 minuto REAL (fixo)
-        3. Religa o nó
+        2. Aguarda MTTR configurado no ConfigSimples (ou 60s se não configurado)
+        3. Religa o nó automaticamente (self-healing)
         4. Contabiliza MTTR configurado para estatísticas
         """
         try:
+            import time
+            
             print(f"  🔌 Desligando worker node: {node_name}")
             
-            # 1. Desligar o nó
-            shutdown_result = self.vm_injector.shutdown_worker_node(node_name)
-            if not shutdown_result.get('success', False):
+            # 1. Desligar o nó usando node_injector
+            shutdown_success, shutdown_command = self.node_injector.shutdown_worker_node(node_name)
+            if not shutdown_success:
                 print(f"  ❌ Falha ao desligar nó {node_name}")
                 return False
             
-            # 2. Aguardar 1 minuto REAL (fixo, independente do MTTR configurado)
-            print(f"  ⏱️  Aguardando 1 minuto antes de religar...")
-            time.sleep(60)  # 1 minuto fixo
+            # 2. Obter MTTR configurado no ConfigSimples para contabilização
+            mttr_hours = 1.0  # Default de 1h simulada
+            mttr_seconds_real = 60  # Sempre 60s reais para testes
             
-            # 3. Religar o nó
-            print(f"  🔌 Religando worker node: {node_name}")
-            startup_result = self.vm_injector.startup_worker_node(node_name)
+            if hasattr(self, '_config_simples') and self._config_simples:
+                mttr_hours = self._config_simples.get_mttr('worker_node')
+                if mttr_hours > 0:
+                    print(f"  ⚙️ MTTR configurado: {mttr_hours}h simuladas (60s reais)")
+                else:
+                    print(f"  ⚙️ MTTR padrão: {mttr_hours}h simuladas (60s reais)")
             
-            if startup_result.get('success', False):
+            print(f"  ⏱️ Aguardando 60s reais (simulando {mttr_hours}h de downtime)...")
+            time.sleep(mttr_seconds_real)
+            
+            # 3. Religar o nó automaticamente usando node_injector  
+            print(f"  � Self-healing: Religando worker node: {node_name}")
+            startup_success, startup_command = self.node_injector.start_worker_node(node_name)
+            
+            if startup_success:
                 print(f"  ✅ Worker node {node_name} religado com sucesso")
                 return True
             else:

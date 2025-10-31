@@ -237,3 +237,55 @@ class NodeFailureInjector:
         except subprocess.CalledProcessError as e:
             print(f"❌ Erro: {e}")
             return False, command
+
+    def shutdown_worker_node(self, target: str) -> Tuple[bool, str]:
+        """
+        Desliga completamente um worker node (docker stop).
+        
+        Args:
+            target: Nome do worker node
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        command = f"docker stop {target}"
+        print(f"⛔ Executando: {command}")
+        print(f"🖥️ Desligando worker node {target} completamente...")
+        
+        try:
+            result = subprocess.run([
+                'docker', 'stop', target
+            ], capture_output=True, text=True, check=True)
+            
+            print(f"✅ Worker node {target} desligado completamente")
+            return True, command
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erro ao desligar {target}: {e}")
+            return False, command
+
+    def start_worker_node(self, target: str) -> Tuple[bool, str]:
+        """
+        Liga um worker node desligado (docker start).
+        
+        Args:
+            target: Nome do worker node
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        command = f"docker start {target}"
+        print(f"▶️ Executando: {command}")
+        print(f"🖥️ Ligando worker node {target}...")
+        
+        try:
+            result = subprocess.run([
+                'docker', 'start', target
+            ], capture_output=True, text=True, check=True)
+            
+            print(f"✅ Worker node {target} ligado com sucesso")
+            return True, command
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erro ao ligar {target}: {e}")
+            return False, command

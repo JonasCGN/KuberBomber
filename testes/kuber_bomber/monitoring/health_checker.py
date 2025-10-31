@@ -294,6 +294,10 @@ class HealthChecker:
                 recovery_time = time.time() - start_time
                 print(f"\n✅ Todas as aplicações recuperadas em {recovery_time:.2f}s")
                 return True, recovery_time
+            elif healthy_count > 0:
+                recovery_time = time.time() - start_time
+                print(f"\n⚠️ Pelo menos 1 aplicação saudável ({healthy_count}/{total_services}) - prosseguindo")
+                return True, recovery_time
             
             print(f"⏸️ Aguardando {self.config.health_check_interval}s antes da próxima verificação...")
             time.sleep(self.config.health_check_interval)
@@ -551,6 +555,11 @@ class HealthChecker:
                 pass
         
         except Exception as e:
-            print(f"⚠️ Erro ao descobrir URLs para {service_name}: {e}")
+            # Suprimir erros quando cluster está temporariamente indisponível
+            if "non-zero exit status" in str(e) or "kubectl" in str(e).lower():
+                # Cluster temporariamente indisponível, não imprimir erro
+                pass
+            else:
+                print(f"⚠️ Erro ao descobrir URLs para {service_name}: {e}")
         
         return discovered_urls

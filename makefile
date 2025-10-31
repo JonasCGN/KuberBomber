@@ -5,22 +5,31 @@ run_port_forward:
 	rm -f Kubernetes-Clusters/port_forward.log
 
 run_deploy_clean:
-# 	kubectl config delete-context local-k8s 2>/dev/null || true
-# 	kubectl config delete-context kind-local-k8s 2>/dev/null || true
-# 	cd Kubernetes-Clusters && ./scripts/deploy.sh --clean
+	kubectl config delete-context local-k8s 2>/dev/null || true
+	kubectl config delete-context kind-local-k8s 2>/dev/null || true
+	cd Kubernetes-Clusters && ./scripts/deploy.sh --clean
 # 	sleep 30
 	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --setup
 	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --deploy --ubuntu
 
 run_deploy:
 	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --setup
-	cd Kubernetes-Clusters && bash src/scripts/local_setup.sh
 	cd Kubernetes-Clusters && ./scripts/deploy.sh --local --deploy --ubuntu
 # 	cd Kubernetes-Clusters && nohup ./scripts/deploy.sh --port-forwards > port_forward.log 2>&1 &
 # 	rm -f Kubernetes-Clusters/port_forward.log
 
 run_testes_site:
 	./Kubernetes-Clusters/scripts/quick_test.sh
+
+# 🧪 Teste isolado para verificar se o sistema de testes está funcionando
+run_test_isolated:
+	@echo "🧪 Iniciando teste isolado para worker node shutdown..."
+	@echo "📋 Verificando nodes disponíveis..."
+	kubectl get nodes | grep worker
+	@echo ""
+	@echo "🔌 Executando teste de shutdown de worker node..."
+	cd testes && python3 reliability_tester.py --component worker_node --failure-method shutdown_worker_node --target local-k8s-worker2 --iterations 1 --interval 5
+	@echo "✅ Teste isolado finalizado!"
 
 # 🎯 Executa TODOS os métodos de falha com 30 iterações e 10s de intervalo
 run_all_failures:
@@ -59,5 +68,5 @@ run_graficos:
 	cd show_graficos && python3 graficos.py
 
 run_simulation:
-	. .venv/bin/activate && \
-	cd /home/jonascgn/Documentos/1_Artigo/testes && python -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5 --use-config-simples
+# 	source ~/venvs/py3env/bin/activate && 
+	cd ./testes && python3 -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5 --use-config-simples
