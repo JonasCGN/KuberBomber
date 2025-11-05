@@ -26,6 +26,7 @@ from ..failure_injectors.control_plane_injector import ControlPlaneInjector
 from ..monitoring.health_checker import HealthChecker
 from ..reports.csv_reporter import CSVReporter
 from ..utils.pod_limiter import PodLimiter
+from ..utils.kubectl_executor import get_kubectl_executor
 
 
 @dataclass
@@ -98,19 +99,32 @@ class AvailabilitySimulator:
     - Monitoramento contínuo de disponibilidade
     - Descoberta automática de componentes
     """
+    # Cache estático para evitar descoberta duplicada durante testes
+    _service_urls_cache = None
+    _cache_timestamp = None
+    _cache_ttl = 300  # 5 minutos
+    _components_cache = None
+    _components_cache_timestamp = None
+    _criteria_setup_done = False
     
-    def __init__(self, components: Optional[List[Component]] = None, min_pods_required: int = 2):
+    def __init__(self, components: Optional[List[Component]] = None, min_pods_required: int = 2, aws_config: Optional[dict] = None):
         """
         Inicializa o simulador.
         
         Args:
             components: Lista de componentes personalizados (opcional)
             min_pods_required: Número mínimo de pods necessários para disponibilidade
+            aws_config: Configuração AWS para conexão remota
         """
         self.min_pods_required = min_pods_required
+        self.aws_config = aws_config
+        self.is_aws_mode = aws_config is not None
         
         # Monitor de saúde (inicializar primeiro para descoberta)
-        self.health_checker = HealthChecker()
+        self.health_checker = HealthChecker(aws_config=aws_config)
+        
+        # Executor de kubectl centralizado
+        self.kubectl = get_kubectl_executor(aws_config)
         
         # Descobrir URLs dos serviços automaticamente
         discovered_urls = self._discover_services_urls()
@@ -158,6 +172,8 @@ class AvailabilitySimulator:
         self.current_simulated_time = 0.0  # horas simuladas
         self.event_queue = []  # heap de eventos
         self.availability_history = []  # histórico de disponibilidade
+    
+
         self.simulation_logs = []  # logs detalhados
         
         # Configurações
@@ -174,10 +190,20 @@ class AvailabilitySimulator:
     def _discover_components(self) -> List[Component]:
         """
         Descobre automaticamente componentes do cluster Kubernetes.
+        Usa cache para evitar descoberta duplicada durante testes consecutivos.
         
         Returns:
             Lista de componentes descobertos
         """
+        import time
+        
+        # Verificar cache
+        current_time = time.time()
+        if (AvailabilitySimulator._components_cache is not None and 
+            AvailabilitySimulator._components_cache_timestamp is not None and 
+            current_time - AvailabilitySimulator._components_cache_timestamp < AvailabilitySimulator._cache_ttl):
+            return AvailabilitySimulator._components_cache
+        
         discovered_components = []
         
         print("🔍 === DESCOBRINDO COMPONENTES DO CLUSTER ===")
@@ -185,12 +211,13 @@ class AvailabilitySimulator:
         # Descobrir aplicações (pods)
         try:
             # Obter todos os deployments
-            result = subprocess.run([
-                'kubectl', 'get', 'deployments', '-o', 'json',
-                '--context', self.health_checker.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'deployments', '-o', 'json'])
             
-            deployments_data = json.loads(result.stdout)
+            if not result['success']:
+                print(f"❌ Erro ao obter deployments: {result['error']}")
+                return discovered_components
+            
+            deployments_data = json.loads(result['output'])
             
             for deployment in deployments_data.get('items', []):
                 name = deployment['metadata']['name']
@@ -209,12 +236,13 @@ class AvailabilitySimulator:
         
         # Descobrir nodes
         try:
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '-o', 'json',
-                '--context', self.health_checker.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'nodes', '-o', 'json'])
             
-            nodes_data = json.loads(result.stdout)
+            if not result['success']:
+                print(f"❌ Erro ao obter nodes: {result['error']}")
+                return discovered_components
+            
+            nodes_data = json.loads(result['output'])
             
             for node in nodes_data.get('items', []):
                 node_name = node['metadata']['name']
@@ -307,27 +335,42 @@ class AvailabilitySimulator:
         
         print()
         
+        # Atualizar cache
+        AvailabilitySimulator._components_cache = discovered_components
+        AvailabilitySimulator._components_cache_timestamp = current_time
+        
         return discovered_components
     
     def _discover_services_urls(self) -> Dict[str, Dict[str, str]]:
         """
         Descobre automaticamente URLs dos serviços (LoadBalancer, NodePort, Ingress).
+        Usa cache para evitar descoberta duplicada durante testes consecutivos.
         
         Returns:
             Dicionário com URLs descobertas para cada serviço
         """
+        import time
+        
+        # Verificar cache
+        current_time = time.time()
+        if (AvailabilitySimulator._service_urls_cache is not None and 
+            AvailabilitySimulator._cache_timestamp is not None and 
+            current_time - AvailabilitySimulator._cache_timestamp < AvailabilitySimulator._cache_ttl):
+            return AvailabilitySimulator._service_urls_cache
+        
         discovered_urls = {}
         
         print("🌐 === DESCOBRINDO URLs DOS SERVIÇOS ===")
         
         try:
             # Descobrir serviços LoadBalancer
-            result = subprocess.run([
-                'kubectl', 'get', 'services', '-o', 'json',
-                '--context', self.health_checker.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'services', '-o', 'json'])
             
-            services_data = json.loads(result.stdout)
+            if not result['success']:
+                print(f"❌ Erro ao obter services: {result['error']}")
+                return discovered_urls
+            
+            services_data = json.loads(result['output'])
             
             for service in services_data.get('items', []):
                 service_name = service['metadata']['name']
@@ -367,39 +410,39 @@ class AvailabilitySimulator:
                 
                 elif service_type == 'NodePort':
                     # NodePort - pegar IP de qualquer node
-                    node_result = subprocess.run([
-                        'kubectl', 'get', 'nodes', '-o', 'json',
-                        '--context', self.health_checker.config.context
-                    ], capture_output=True, text=True, check=True)
+                    node_result = self.kubectl.execute_kubectl([
+                        'get', 'nodes', '-o', 'json'
+                    ])
                     
-                    nodes_data = json.loads(node_result.stdout)
-                    
-                    # Pegar IP do primeiro node disponível
-                    node_ip = None
-                    for node in nodes_data.get('items', []):
-                        addresses = node['status'].get('addresses', [])
-                        for addr in addresses:
-                            if addr['type'] in ['InternalIP', 'ExternalIP']:
-                                node_ip = addr['address']
+                    if node_result['success']:
+                        nodes_data = json.loads(node_result['output'])
+                        
+                        # Pegar IP do primeiro node disponível
+                        node_ip = None
+                        for node in nodes_data.get('items', []):
+                            addresses = node['status'].get('addresses', [])
+                            for addr in addresses:
+                                if addr['type'] in ['InternalIP', 'ExternalIP']:
+                                    node_ip = addr['address']
+                                    break
+                            if node_ip:
                                 break
+                        
                         if node_ip:
-                            break
-                    
-                    if node_ip:
-                        ports = service['spec'].get('ports', [])
-                        for port in ports:
-                            node_port = port.get('nodePort')
-                            target_port = port.get('targetPort', port.get('port', 80))
-                            
-                            if node_port:
-                                base_name = service_name.replace('-loadbalancer', '').replace('-service', '').replace('-svc', '')
-                                endpoint = f"/{base_name}"
-                                url = f"http://{node_ip}:{node_port}{endpoint}"
+                            ports = service['spec'].get('ports', [])
+                            for port in ports:
+                                node_port = port.get('nodePort')
+                                target_port = port.get('targetPort', port.get('port', 80))
                                 
-                                service_urls['nodeport_url'] = url
-                                service_urls['port'] = target_port
-                                service_urls['endpoint'] = endpoint
-                                break
+                                if node_port:
+                                    base_name = service_name.replace('-loadbalancer', '').replace('-service', '').replace('-svc', '')
+                                    endpoint = f"/{base_name}"
+                                    url = f"http://{node_ip}:{node_port}{endpoint}"
+                                    
+                                    service_urls['nodeport_url'] = url
+                                    service_urls['port'] = target_port
+                                    service_urls['endpoint'] = endpoint
+                                    break
                 
                 if service_urls:
                     discovered_urls[service_name] = service_urls
@@ -409,40 +452,40 @@ class AvailabilitySimulator:
             
             # Tentar descobrir Ingress também
             try:
-                ingress_result = subprocess.run([
-                    'kubectl', 'get', 'ingress', '-o', 'json',
-                    '--context', self.health_checker.config.context
-                ], capture_output=True, text=True, check=True)
+                ingress_result = self.kubectl.execute_kubectl([
+                    'get', 'ingress', '-o', 'json'
+                ])
                 
-                ingress_data = json.loads(ingress_result.stdout)
-                
-                for ingress in ingress_data.get('items', []):
-                    ingress_name = ingress['metadata']['name']
+                if ingress_result['success']:
+                    ingress_data = json.loads(ingress_result['output'])
                     
-                    # Pegar IP do ingress
-                    ingress_ip = None
-                    status = ingress.get('status', {})
-                    load_balancer = status.get('loadBalancer', {})
-                    ingress_list = load_balancer.get('ingress', [])
-                    
-                    if ingress_list:
-                        ingress_ip = ingress_list[0].get('ip')
-                    
-                    if ingress_ip:
-                        rules = ingress['spec'].get('rules', [])
-                        for rule in rules:
-                            paths = rule.get('http', {}).get('paths', [])
-                            for path in paths:
-                                path_str = path.get('path', '/')
-                                backend = path.get('backend', {})
-                                service_name = backend.get('service', {}).get('name') or backend.get('serviceName')
-                                
-                                if service_name and service_name in discovered_urls:
-                                    ingress_url = f"http://{ingress_ip}{path_str}"
-                                    discovered_urls[service_name]['ingress_url'] = ingress_url
-                                    print(f"  🔗 {service_name} (Ingress): {ingress_url}")
+                    for ingress in ingress_data.get('items', []):
+                        ingress_name = ingress['metadata']['name']
+                        
+                        # Pegar IP do ingress
+                        ingress_ip = None
+                        status = ingress.get('status', {})
+                        load_balancer = status.get('loadBalancer', {})
+                        ingress_list = load_balancer.get('ingress', [])
+                        
+                        if ingress_list:
+                            ingress_ip = ingress_list[0].get('ip')
+                        
+                        if ingress_ip:
+                            rules = ingress['spec'].get('rules', [])
+                            for rule in rules:
+                                paths = rule.get('http', {}).get('paths', [])
+                                for path in paths:
+                                    path_str = path.get('path', '/')
+                                    backend = path.get('backend', {})
+                                    service_name = backend.get('service', {}).get('name') or backend.get('serviceName')
                                     
-            except subprocess.CalledProcessError:
+                                    if service_name and service_name in discovered_urls:
+                                        ingress_url = f"http://{ingress_ip}{path_str}"
+                                        discovered_urls[service_name]['ingress_url'] = ingress_url
+                                        print(f"  🔗 {service_name} (Ingress): {ingress_url}")
+                                        
+            except Exception:
                 print("  ℹ️ Nenhum Ingress encontrado ou erro ao consultar")
         
         except Exception as e:
@@ -451,12 +494,21 @@ class AvailabilitySimulator:
         print(f"✅ URLs descobertas para {len(discovered_urls)} serviços")
         print()
         
+        # Atualizar cache
+        AvailabilitySimulator._service_urls_cache = discovered_urls
+        AvailabilitySimulator._cache_timestamp = current_time
+        
         return discovered_urls
     
     def _setup_default_availability_criteria(self):
         """
         Configura critérios de disponibilidade padrão baseado nos componentes descobertos.
+        Usa cache para evitar configuração duplicada.
         """
+        # Verificar se já foi configurado
+        if AvailabilitySimulator._criteria_setup_done:
+            return
+            
         # Para cada aplicação (pod), exigir pelo menos 1 instância
         for component in self.components:
             if component.component_type == "pod":
@@ -468,6 +520,9 @@ class AvailabilitySimulator:
             print(f"✅ {len(self.availability_criteria)} critérios de disponibilidade configurados")
         else:
             print("⚠️ Nenhum critério de disponibilidade configurado")
+            
+        # Marcar como configurado
+        AvailabilitySimulator._criteria_setup_done = True
         print()
     
     def configure_component_mttfs(self, custom_mttfs: Optional[Dict[str, float]] = None):

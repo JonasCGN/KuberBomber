@@ -3,21 +3,21 @@
 - Definir quantos pods cabem dentro de um worker_node
 
 - Tentar desligar e depois tentar dar um start em um worker_node e definir o MTTR sera o tempo de recuperacao
+(Certo)
 
 -----------------------------------------
 
 - Configuracao de 3 worker_node cada um cabendo 3 pods independente do pod contando com as réplicas
 
-- Fazer uma classe de configuracao facil, para configuracao de MTTF e MTTR dos componentes
-- Deixar uma classe extremamente simplificada para configuracao e sera executado em loop em cima dessa classe
+- Fazer uma classe de configuracao facil, para configuracao de MTTF e MTTR dos componentes (Ta Feito)
+- Deixar uma classe extremamente simplificada para configuracao e sera executado em loop em cima dessa classe (Ta Feito)
 
-- Couber sem contar os de sistemas, precisa dos de sistemas 
+- Couber sem contar os de sistemas, precisa dos de sistemas (Verifiquei e ta feito)
 
-- e descobrir a disponibilidade(teste de simulacao anterior) e rodar 30x
-- Vai ter todos tipos de falha mais o shutdown_worker_node
-- Pegar a media e desvio padrao pra cada, gerar csv de cada interecao
-- Salvar a configuração de MTTF e MTTR para o experimento
-
+- e descobrir a disponibilidade(teste de simulacao anterior) e rodar 30x (Ta Feito, problema é rodar)
+- Vai ter todos tipos de falha mais o shutdown_worker_node (Ta Feito)
+- Pegar a media e desvio padrao pra cada, gerar csv de cada interecao (Ta Feito)
+- Salvar a configuração de MTTF e MTTR para o experimento (Ta Feito)
 
 -----------------------------------------
 
@@ -35,3 +35,8 @@ availability_csv/
 4
 ..
 n_interacoes
+
+#Para o minikube
+minikube node stop minikube-m02
+
+minikube node start minikube-m02

@@ -1,0 +1,243 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: foo-app
+  labels:
+    app: foo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: foo
+  template:
+    metadata:
+      labels:
+        app: foo
+    spec:
+      shareProcessNamespace: true  # CRUCIAL: Compartilha processos entre containers
+      containers:
+        - name: foo-app
+          image: iuresf/apprunner  # Aplicação original
+          env:
+            - name: LOAD
+              value: "0.99"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH
+              value: "/foo"
+          resources:
+            requests:
+              cpu: "750m"
+            limits:
+              cpu: "750m"
+        - name: debug-tools
+          image: ubuntu:22.04
+          command: ["/bin/bash"]
+          args: ["-c", "apt-get update && apt-get install -y procps psmisc htop strace stress-ng iproute2 net-tools curl wget vim nano && sleep infinity"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN", "SYS_PTRACE", "KILL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "256Mi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: foo-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: foo-app
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 90
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: foo-service
+spec:
+  selector:
+    app: foo
+  ports:
+    - port: 9898
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bar-app
+  labels:
+    app: bar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bar
+  template:
+    metadata:
+      labels:
+        app: bar
+    spec:
+      shareProcessNamespace: true  # CRUCIAL: Compartilha processos entre containers
+      containers:
+        - name: bar-app
+          image: iuresf/apprunner
+          env:
+            - name: LOAD
+              value: "0.99"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH
+              value: "/bar"
+          resources:
+            requests:
+              cpu: "750m"
+            limits:
+              cpu: "750m"
+        - name: debug-tools
+          image: ubuntu:22.04
+          command: ["/bin/bash"]
+          args: ["-c", "apt-get update && apt-get install -y procps psmisc htop strace stress-ng iproute2 net-tools curl wget vim nano && sleep infinity"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN", "SYS_PTRACE", "KILL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "256Mi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bar-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bar-app
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 90
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: bar-service
+spec:
+  selector:
+    app: bar
+  ports:
+    - port: 9898
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  labels:
+    app: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      shareProcessNamespace: true  # CRUCIAL: Compartilha processos entre containers
+      containers:
+        - name: test-app
+          image: iuresf/apprunner
+          env:
+            - name: LOAD
+              value: "0.01"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH
+              value: "/test"
+          resources:
+            requests:
+              cpu: "100m"
+            limits:
+              cpu: "100m"
+        - name: debug-tools
+          image: ubuntu:22.04
+          command: ["/bin/bash"]
+          args: ["-c", "apt-get update && apt-get install -y procps psmisc htop strace stress-ng iproute2 net-tools curl wget vim nano && sleep infinity"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN", "SYS_PTRACE", "KILL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "256Mi"
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: test-service
+spec:
+  selector:
+    app: test
+  ports:
+    - port: 9898
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - pathType: Prefix
+            path: /foo
+            backend:
+              service:
+                name: foo-service
+                port:
+                  number: 9898
+          - pathType: Prefix
+            path: /bar
+            backend:
+              service:
+                name: bar-service
+                port:
+                  number: 9898
+          - pathType: Prefix
+            path: /test
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 9898

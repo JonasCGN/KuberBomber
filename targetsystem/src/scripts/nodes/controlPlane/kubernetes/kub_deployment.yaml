@@ -1,0 +1,200 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: foo-app
+  labels:
+    app: foo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: foo
+  template:
+    metadata:
+      labels:
+        app: foo
+    spec:
+      containers:
+        - name: foo-app
+          image: iuresf/apprunner  # Same image
+          env:
+            - name: LOAD
+              value: "0.99"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH # Adicionado para rota dinâmica
+              value: "/foo"
+          resources:
+            requests:
+              cpu: "750m"  # Request 100 millicores of CPU
+            limits:
+              cpu: "750m"  # Limit to 200 millicores of CPU
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: foo-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: foo-app
+  minReplicas: 1  # Minimum number of replicas
+  maxReplicas: 10  # Maximum number of replicas
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 90  # Target 50% CPU utilization
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: foo-service
+spec:
+  selector:
+    app: foo
+  ports:
+    - port: 9898
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bar-app
+  labels:
+    app: bar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bar
+  template:
+    metadata:
+      labels:
+        app: bar
+    spec:
+      containers:
+        - name: bar-app
+          image: iuresf/apprunner  # Same image
+          env:
+            - name: LOAD
+              value: "0.99"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH # Adicionado para rota dinâmica
+              value: "/bar"
+          resources:
+            requests:
+              cpu: "750m"  # Request 750 millicores of CPU
+            limits:
+              cpu: "750m"  # Limit to 750 millicores of CPU
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bar-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bar-app
+  minReplicas: 1  # Minimum number of replicas
+  maxReplicas: 10  # Maximum number of replicas
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 90  # Target 50% CPU utilization
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: bar-service
+spec:
+  selector:
+    app: bar
+  ports:
+    - port: 9898
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  labels:
+    app: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      containers:
+        - name: test-app
+          image: iuresf/apprunner
+          env:
+            - name: LOAD
+              value: "0.01"
+            - name: MEAN
+              value: "0.01"
+            - name: ROUTE_PATH
+              value: "/test"
+          resources:
+            requests:
+              cpu: "100m"
+            limits:
+              cpu: "100m"
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: test-service
+spec:
+  selector:
+    app: test
+  ports:
+    - port: 9898
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-ingress
+  namespace: default # É uma boa prática definir o namespace explicitamente
+  annotations:
+  # A anotação de reescrita foi removida, pois a aplicação agora lida
+  # com o caminho completo (ex: /foo, /bar, /test).
+  # O Ingress Controller encaminha o caminho tal como ele é recebido.
+spec:
+  ingressClassName: nginx # Certifique-se de que corresponde ao seu IngressClass
+  rules:
+    # - host: "*.amazonaws.com" # Corrigido para um curinga DNS-1123 válido
+      http:
+        paths:
+          - pathType: Prefix
+            path: /foo
+            backend:
+              service:
+                name: foo-service
+                port:
+                  number: 9898
+          - pathType: Prefix
+            path: /bar
+            backend:
+              service:
+                name: bar-service
+                port:
+                  number: 9898
+          - pathType: Prefix
+            path: /test
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 9898

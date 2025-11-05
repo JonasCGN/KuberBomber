@@ -1,0 +1,1 @@
+- Quando pauso e starto novamente, tem probkemas de conexao dentro do pod

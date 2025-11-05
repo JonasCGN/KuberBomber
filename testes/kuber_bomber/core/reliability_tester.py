@@ -21,6 +21,7 @@ from ..reports.metrics_analyzer import MetricsAnalyzer
 from ..simulation.accelerated_simulation import AcceleratedSimulation
 from ..utils.interactive_selector import InteractiveSelector
 from ..utils.config import get_config
+from ..utils.kubectl_executor import KubectlExecutor
 
 
 class ReliabilityTester:
@@ -34,29 +35,53 @@ class ReliabilityTester:
     medir a confiabilidade de diferentes componentes do sistema.
     """
     
-    def __init__(self, time_acceleration: float = 1.0, base_mttf_hours: float = 1.0):
+    def __init__(self, time_acceleration: float = 1.0, base_mttf_hours: float = 1.0, aws_config: Optional[Dict] = None):
         """
         Inicializa o testador de confiabilidade.
         
         Args:
             time_acceleration: Fator de aceleração temporal para simulação
             base_mttf_hours: MTTF base em horas para distribuição de falhas
+            aws_config: Configuração para uso em ambiente AWS (ssh_host, ssh_key, ssh_user, applications)
         """
+        # Configuração AWS
+        self.aws_config = aws_config
+        self.is_aws_mode = aws_config is not None
+        
+        # Inicializar KubectlExecutor
+        self.kubectl = KubectlExecutor(aws_config=aws_config if self.is_aws_mode else None)
+        
         # Componentes do framework
-        self.config = get_config()
-        self.health_checker = HealthChecker()
-        self.system_monitor = SystemMonitor()
+        self.config = get_config(aws_mode=self.is_aws_mode)
+        
+        # Inicializar componentes com configuração AWS se disponível
+        if self.is_aws_mode:
+            self.health_checker = HealthChecker(aws_config=aws_config)
+            self.system_monitor = SystemMonitor(aws_config=aws_config)
+        else:
+            self.health_checker = HealthChecker()
+            self.system_monitor = SystemMonitor()
+            
         self.csv_reporter = CSVReporter()
         self.metrics_analyzer = MetricsAnalyzer()
         self.interactive_selector = InteractiveSelector()
         
         # Injetores de falha
+        if self.is_aws_mode and aws_config:
+            # Usar AWS injector integrado
+            from ..failure_injectors.aws_injector import AWSFailureInjector
+            self.aws_injector = AWSFailureInjector(
+                ssh_key=aws_config['ssh_key'],
+                ssh_host=aws_config['ssh_host'],
+                ssh_user=aws_config['ssh_user']
+            )
+        
         self.pod_injector = PodFailureInjector()
         self.node_injector = NodeFailureInjector()
         
         # Importar ControlPlaneInjector dinamicamente
         from ..failure_injectors.control_plane_injector import ControlPlaneInjector
-        self.control_plane_injector = ControlPlaneInjector()
+        self.control_plane_injector = ControlPlaneInjector(aws_config=aws_config)
         
         # Simulação acelerada
         self.accelerated_sim = AcceleratedSimulation(time_acceleration, base_mttf_hours)
@@ -71,29 +96,53 @@ class ReliabilityTester:
         self.stop_simulation_event = threading.Event()
         
         # Mapeamento de métodos de falha - TODOS da tabela
-        self.failure_methods = {
-            # === POD FAILURES ===
-            'kill_processes': self.pod_injector.kill_all_processes,
-            'kill_init': self.pod_injector.kill_init_process,
-            # 'delete_pod': self.pod_injector.delete_pod,
-            
-            # === WORKER NODE FAILURES ===
-            'kill_worker_node_processes': self.node_injector.kill_worker_node_processes,
-            'restart_worker_node': self.node_injector.kill_worker_node_processes,  # Mesmo que kill (docker restart)
-            'kill_kubelet': self.control_plane_injector.kill_kubelet,
-            'shutdown_worker_node': self._shutdown_worker_node_handler,  # Handler especial para shutdown de VM
-            
-            # === CONTROL PLANE FAILURES ===
-            'kill_control_plane_processes': self.node_injector.kill_control_plane_processes,
-            'kill_kube_apiserver': self.control_plane_injector.kill_kube_apiserver,
-            'kill_kube_controller_manager': self.control_plane_injector.kill_kube_controller_manager,
-            'kill_kube_scheduler': self.control_plane_injector.kill_kube_scheduler,
-            'kill_etcd': self.control_plane_injector.kill_etcd,
-            
-            # === NETWORK/RUNTIME FAILURES ===
-            'delete_kube_proxy': self.control_plane_injector.delete_kube_proxy_pod,
-            'restart_containerd': self.control_plane_injector.restart_containerd
-        }
+        if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+            self.failure_methods = {
+                # === POD FAILURES ===
+                'kill_processes': self.aws_injector.kill_all_processes,
+                'kill_init': self.aws_injector.kill_init_process,
+                
+                # === WORKER NODE FAILURES ===
+                'kill_worker_node_processes': self.aws_injector.kill_worker_node_processes,
+                'restart_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método 
+                'kill_kubelet': self.aws_injector.kill_kubelet,
+                'shutdown_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método por ora
+                
+                # === CONTROL PLANE FAILURES ===
+                'kill_control_plane_processes': self.aws_injector.kill_control_plane_processes,
+                'kill_kube_apiserver': self.aws_injector.kill_kube_apiserver,
+                'kill_kube_controller_manager': self.aws_injector.kill_kube_controller_manager,
+                'kill_kube_scheduler': self.aws_injector.kill_kube_scheduler,
+                'kill_etcd': self.aws_injector.kill_etcd,
+                
+                # === NETWORK/RUNTIME FAILURES ===
+                'delete_kube_proxy': self.aws_injector.delete_kube_proxy_pod,
+                'restart_containerd': self.aws_injector.restart_containerd
+            }
+        else:
+            self.failure_methods = {
+                # === POD FAILURES ===
+                'kill_processes': self.pod_injector.kill_all_processes,
+                'kill_init': self.pod_injector.kill_init_process,
+                # 'delete_pod': self.pod_injector.delete_pod,
+                
+                # === WORKER NODE FAILURES ===
+                'kill_worker_node_processes': self.node_injector.kill_worker_node_processes,
+                'restart_worker_node': self.node_injector.kill_worker_node_processes,  # Mesmo que kill (docker restart)
+                'kill_kubelet': self.control_plane_injector.kill_kubelet,
+                'shutdown_worker_node': self._shutdown_worker_node_handler,  # Handler especial para shutdown de VM
+                
+                # === CONTROL PLANE FAILURES ===
+                'kill_control_plane_processes': self.node_injector.kill_control_plane_processes,
+                'kill_kube_apiserver': self.control_plane_injector.kill_kube_apiserver,
+                'kill_kube_controller_manager': self.control_plane_injector.kill_kube_controller_manager,
+                'kill_kube_scheduler': self.control_plane_injector.kill_kube_scheduler,
+                'kill_etcd': self.control_plane_injector.kill_etcd,
+                
+                # === NETWORK/RUNTIME FAILURES ===
+                'delete_kube_proxy': self.control_plane_injector.delete_kube_proxy_pod,
+                'restart_containerd': self.control_plane_injector.restart_containerd
+            }
     
     def initial_system_check(self) -> Tuple[int, Dict, List[str]]:
         """
@@ -107,8 +156,8 @@ class ReliabilityTester:
         # Mostrar status dos pods
         self.system_monitor.show_pod_status()
         
-        # Verificar port-forwards
-        self.health_checker.check_port_forwards()
+        # Verificar port-forwards (comentado - usando IP público AWS)
+        # self.health_checker.check_port_forwards()
         
         # Verificar saúde das aplicações
         print("🔍 Verificando saúde das aplicações via HTTP...")
@@ -283,11 +332,15 @@ class ReliabilityTester:
         print("⚠️ NENHUMA APLICAÇÃO ESTÁ SAUDÁVEL!")
         print("💡 Possíveis soluções:")
         print("   1. Verifique se os pods estão rodando: kubectl get pods")
-        print("   2. Configure port-forwards:")
-        print("      kubectl port-forward svc/foo-service 8080:80 &")
-        print("      kubectl port-forward svc/bar-service 8081:80 &")
-        print("      kubectl port-forward svc/test-service 8082:80 &")
-        print("   3. Ou execute o script port-forward-monitor.sh")
+        if not self.is_aws_mode:
+            print("   2. Configure port-forwards:")
+            print("      kubectl port-forward svc/foo-service 8080:80 &")
+            print("      kubectl port-forward svc/bar-service 8081:80 &")
+            print("      kubectl port-forward svc/test-service 8082:80 &")
+            print("   3. Ou execute o script port-forward-monitor.sh")
+        else:
+            print("   2. Verifique se as aplicações estão acessíveis via IP público")
+            print("   3. Verifique se os serviços NodePort estão configurados")
         print("\n🔧 Deseja continuar mesmo assim? (y/N):")
         
         try:
@@ -452,11 +505,11 @@ class ReliabilityTester:
             
             # 8. Verificação final do node
             try:
-                result = subprocess.run([
-                    'kubectl', 'get', 'node', target, '-o', 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
-                ], capture_output=True, text=True, timeout=30)
+                result = self.kubectl.execute_kubectl([
+                    'get', 'node', target, '-o', 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
+                ])
                 
-                if result.returncode == 0 and result.stdout.strip() == 'True':
+                if result['success'] and result['output'].strip() == 'True':
                     print(f"✅ Node {target} está Ready - recovery completo!")
                     return True, f"shutdown_worker_node {target} (auto-recovered)"
                 else:
@@ -580,12 +633,12 @@ class ReliabilityTester:
         
         while time.time() - start_time < timeout:
             try:
-                result = subprocess.run([
-                    'kubectl', 'get', 'node', node_name, 
+                result = self.kubectl.execute_kubectl([
+                    'get', 'node', node_name, 
                     '-o', 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
-                ], capture_output=True, text=True, timeout=10)
+                ])
                 
-                if result.returncode == 0 and result.stdout.strip() == 'True':
+                if result['success'] and result['output'].strip() == 'True':
                     print(f"✅ Node {node_name} está Ready!")
                     return True
                     

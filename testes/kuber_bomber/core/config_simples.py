@@ -7,7 +7,7 @@ dos componentes para experimentos de 30 iterações.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 import json
 import os
 from datetime import datetime
@@ -23,7 +23,15 @@ class ConfigSimples:
     - 30 iterações 
     - Falhas aleatórias
     - MTTF e MTTR detalhados para todos os componentes Kubernetes
+    - Suporte a AWS com configurações específicas
     """
+    
+    # ===== CONFIGURAÇÃO AWS =====
+    aws_enabled: bool = True
+    aws_public_ip: str = "98.80.193.224"
+    aws_ssh_key_path: str = "~/.ssh/vockey.pem"
+    aws_ssh_user: str = "ubuntu"
+    aws_applications: List[str] = field(default_factory=lambda: ['bar-app', 'foo-app', 'test-app'])
     
     # Configuração flexível do cluster
     # Pode ser int (mesmo número para todos) ou Dict {worker_name: num_pods}
@@ -32,6 +40,7 @@ class ConfigSimples:
         'worker-2': 3, 
         'worker-3': 2
     })
+    
     iterations: int = 30
     
     # ===== CONFIGURAÇÃO DETALHADA MTTF/MTTR =====
@@ -259,7 +268,17 @@ class ConfigSimples:
     def print_summary(self):
         """Imprime resumo da configuração."""
         print("🔧 === CONFIGURAÇÃO SIMPLES DETALHADA ===")
-        print(f"📊 Cluster: {self.get_worker_count()} worker nodes com {self.get_total_pods()} pods total")
+        
+        # Configuração AWS
+        if self.aws_enabled:
+            print("☁️ === CONFIGURAÇÃO AWS ===")
+            print(f"🌐 IP Público: {self.aws_public_ip}")
+            print(f"� Chave SSH: {self.aws_ssh_key_path}")
+            print(f"👤 Usuário SSH: {self.aws_ssh_user}")
+            print(f"📱 Aplicações AWS: {', '.join(self.aws_applications)}")
+            print()
+        
+        print(f"�📊 Cluster: {self.get_worker_count()} worker nodes com {self.get_total_pods()} pods total")
         print("   Distribuição de pods por worker:")
         if isinstance(self.worker_nodes_config, dict):
             for worker_name, pod_count in self.worker_nodes_config.items():
@@ -290,8 +309,41 @@ class ConfigSimples:
         print(f"  📦 Pods/Containers: self-healing automático")
         print()
         print("🎯 Aplicações monitoradas:")
-        for app in self.applications:
+        apps_to_show = self.aws_applications if self.aws_enabled else self.applications
+        for app in apps_to_show:
             print(f"  • {app}: ≥1 pod")
+    
+    def configure_aws(self, public_ip: str, ssh_key_path: str = "~/.ssh/vockey.pem", 
+                     ssh_user: str = "ubuntu", applications: Optional[List[str]] = None):
+        """
+        Configura parâmetros para ambiente AWS.
+        
+        Args:
+            public_ip: IP público da instância AWS
+            ssh_key_path: Caminho para a chave SSH
+            ssh_user: Usuário SSH (padrão: ubuntu)
+            applications: Lista de aplicações (padrão: bar-app, foo-app, test-app)
+        """
+        self.aws_enabled = True
+        self.aws_public_ip = public_ip
+        self.aws_ssh_key_path = ssh_key_path
+        self.aws_ssh_user = ssh_user
+        if applications:
+            self.aws_applications = applications
+        
+        print(f"✅ AWS configurado: {ssh_user}@{public_ip}")
+    
+    def get_aws_config(self) -> Dict[str, Any]:
+        """Retorna configuração AWS para uso no reliability tester."""
+        if not self.aws_enabled:
+            return {}
+        
+        return {
+            'ssh_host': self.aws_public_ip,
+            'ssh_key': self.aws_ssh_key_path,
+            'ssh_user': self.aws_ssh_user,
+            'applications': self.aws_applications
+        }
 
 
 # Configurações predefinidas

@@ -140,6 +140,16 @@ Tipos de timeout disponíveis:
     parser.add_argument('--no-realtime-csv', action='store_true',
                        help='Desabilita CSV em tempo real (salva apenas no final)')
     
+    # ======= FLAG AWS =======
+    parser.add_argument('--aws', action='store_true',
+                       help='Usa configuração AWS (IP: 44.211.93.99, chave SSH: vockey.pem)')
+    
+    parser.add_argument('--aws-ip', type=str,
+                       help='IP público AWS personalizado (sobrescreve padrão)')
+    
+    parser.add_argument('--aws-key', type=str,
+                       help='Caminho da chave SSH AWS (sobrescreve padrão)')
+    
     return parser
 
 
@@ -181,14 +191,38 @@ def main():
         config.enable_realtime_csv = False
         print("📊 CSV em tempo real desabilitado")
     
+    # ======= PROCESSAR CONFIGURAÇÃO AWS =======
+    aws_config = None
+    if args.aws:
+        print("☁️ === MODO AWS HABILITADO ===")
+        # Configuração padrão
+        aws_ip = args.aws_ip or "3.235.58.98"
+        aws_key = args.aws_key or "~/.ssh/vockey.pem"
+        aws_user = "ubuntu"
+        aws_apps = ["bar-app", "foo-app", "test-app"]
+        
+        print(f"🌐 IP AWS: {aws_ip}")
+        print(f"🔑 Chave SSH: {aws_key}")
+        print(f"👤 Usuário: {aws_user}")
+        print(f"📱 Aplicações: {', '.join(aws_apps)}")
+        
+        aws_config = {
+            'ssh_host': aws_ip,
+            'ssh_key': aws_key,
+            'ssh_user': aws_user,
+            'applications': aws_apps
+        }
+        print("✅ Configuração AWS carregada")
+    
     # Cria o tester com configuração de aceleração se especificada
     if args.accelerated or args.time_acceleration > 1.0:
         tester = ReliabilityTester(
             time_acceleration=args.time_acceleration, 
-            base_mttf_hours=args.base_mttf
+            base_mttf_hours=args.base_mttf,
+            aws_config=aws_config
         )
     else:
-        tester = ReliabilityTester()
+        tester = ReliabilityTester(aws_config=aws_config)
     
     # ======= PROCESSAR COMANDOS ORIGINAIS =======
     

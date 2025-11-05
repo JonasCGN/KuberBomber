@@ -1,0 +1,44 @@
+# Dockerfile otimizado para aplicação init (sem bootstrap.jar)
+FROM ubuntu:20.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install all dependencies in single layer with proper cleanup
+RUN apt-get update && apt-get install -y \
+    xvfb \
+    curl \
+    wget \
+    java-common \
+    ca-certificates \
+    && curl -L https://cdn.azul.com/zulu/bin/zulu11.68.17-ca-fx-jdk11.0.21-linux_amd64.deb -o zulu-jdk.deb \
+    && apt install -y ./zulu-jdk.deb \
+    && update-alternatives --install /usr/bin/java java /usr/lib/jvm/zulu-fx-11-amd64/bin/java 2116800 \
+    && rm -rf zulu-jdk.deb \
+    && apt-get clean autoclean \
+    && apt-get autoremove --yes \
+    && rm -rf /var/lib/{apt,dpkg,cache,log} \
+    && rm -rf /var/cache/apt/archives
+
+# Environment variables
+ENV ENVIRONMENT="DOCKER"
+ENV ERROR="0.1"
+
+WORKDIR /app
+
+# Create all required directories
+RUN mkdir -p project/models \
+    && mkdir -p project/output \
+    && mkdir -p /results/data \
+    && mkdir -p /results/graph \
+    && mkdir models
+
+# Copy application files (apenas model.xml por enquanto)
+COPY model.xml src/main/resources/projects/iure/kubernatessurvivability/survivability_base_mtta.xml
+
+# Add healthcheck (básico para container sem aplicação principal)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD java -version || exit 1
+
+# Comando padrão para manter container rodando
+CMD ["tail", "-f", "/dev/null"]

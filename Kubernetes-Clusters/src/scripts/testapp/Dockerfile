@@ -14,7 +14,7 @@ RUN pip install Flask
 EXPOSE 9898
 
 # Environment variables for mean processing time and load
-ENV MEAN=1.0 \
+ENV MEAN=0.01 \
     LOAD=0.5 \
     ROUTE_PATH=""
 

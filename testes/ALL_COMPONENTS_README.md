@@ -74,7 +74,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Container do nó volta, pods reiniciam  
+**Self-healing:** ✅ Container do nó volta, pods reiniciam
 **Observação:** Todos os pods do nó param temporariamente
 
 ### 2.2 Kill Kubelet
@@ -88,7 +88,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Container reinicia kubelet automaticamente  
+**Self-healing:** ✅ Container reinicia kubelet automaticamente
 **Observação:** Não afeta outros nós
 
 ### 2.3 Delete kube-proxy Pod
@@ -102,7 +102,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ DaemonSet recria o pod automaticamente  
+**Self-healing:** ✅ DaemonSet recria o pod automaticamente
 **Observação:** Pode causar falhas temporárias de rede
 
 ### 2.4 Restart Container Runtime (containerd)
@@ -116,7 +116,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Nó inteiro reinicia  
+**Self-healing:** ✅ Nó inteiro reinicia
 **Observação:** Em Kind, equivale a `docker restart <node>`
 
 ## 🎛️ 3. Testes de Control Plane
@@ -132,7 +132,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Container reinicia com todos os componentes  
+**Self-healing:** ✅ Container reinicia com todos os componentes
 **Observação:** Cluster fica indisponível temporariamente
 
 ### 3.2 Kill kube-apiserver
@@ -146,7 +146,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Static Pod reinicia automaticamente  
+**Self-healing:** ✅ Static Pod reinicia automaticamente
 **Observação:** API fica indisponível durante restart
 
 ### 3.3 Kill kube-controller-manager
@@ -160,7 +160,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Static Pod reinicia automaticamente  
+**Self-healing:** ✅ Static Pod reinicia automaticamente
 **Observação:** Recursos não são reconciliados enquanto estiver down
 
 ### 3.4 Kill kube-scheduler
@@ -174,7 +174,7 @@ python3 reliability_tester.py \
   --interval 10
 ```
 
-**Self-healing:** ✅ Static Pod reinicia automaticamente  
+**Self-healing:** ✅ Static Pod reinicia automaticamente
 **Observação:** Novos pods não são agendados até voltar
 
 ### 3.5 Kill etcd ⚠️
@@ -189,26 +189,25 @@ python3 reliability_tester.py \
   --timeout extended
 ```
 
-**Self-healing:** ✅ Static Pod reinicia automaticamente  
-**⚠️ ATENÇÃO:** Cluster fica "mudo" temporariamente, não aceita alterações  
+**Self-healing:** ✅ Static Pod reinicia automaticamente
+**⚠️ ATENÇÃO:** Cluster fica "mudo" temporariamente, não aceita alterações
 **Recomendação:** Use timeout `extended` (20 min)
 
 ## 📊 Tabela Completa de Métodos
 
-| Componente                  | `--failure-method`             | `--component`   | Comando Sugerido                           | Self-healing |
-| --------------------------- | ------------------------------ | --------------- | ------------------------------------------ | ------------ |
-| **Container (all PIDs)**    | `kill_processes`               | `pod`           | `kill -9 -1`                               | ✅            |
-| **Container (PID 1)**       | `kill_init`                    | `pod`           | `kill -9 1`                                | ✅            |
-| **Pod inteiro**             | `delete_pod`                   | `pod`           | `kubectl delete pod`                       | ✅            |
-| **Worker Node**             | `kill_worker_node_processes`   | `worker_node`   | `docker restart <node>`                    | ✅            |
-| **kubelet**                 | `kill_kubelet`                 | `worker_node`   | `pkill kubelet`                            | ✅            |
-| **kube-proxy**              | `delete_kube_proxy`            | `worker_node`   | `kubectl delete pod -l k8s-app=kube-proxy` | ✅            |
-| **containerd**              | `restart_containerd`           | `worker_node`   | `docker restart <node>`                    | ✅            |
-| **Control Plane (todos)**   | `kill_control_plane_processes` | `control_plane` | `docker restart control-plane`             | ✅            |
-| **kube-apiserver**          | `kill_kube_apiserver`          | `control_plane` | `pkill kube-apiserver`                     | ✅            |
-| **kube-controller-manager** | `kill_kube_controller_manager` | `control_plane` | `pkill kube-controller`                    | ✅            |
-| **kube-scheduler**          | `kill_kube_scheduler`          | `control_plane` | `pkill kube-scheduler`                     | ✅            |
-| **etcd**                    | `kill_etcd`                    | `control_plane` | `pkill etcd`                               | ✅            |
+| Componente                        | `--failure-method`             | `--component`   | Comando Sugerido                             | Self-healing |
+| --------------------------------- | -------------------------------- | ----------------- | -------------------------------------------- | ------------ |
+| **Container (all PIDs)**    | `kill_processes`               | `pod`           | `kill -9 -1`                               | ✅           |
+| **Container (PID 1)**       | `kill_init`                    | `pod`           | `kill -9 1`                                | ✅           |
+| **Worker Node**             | `kill_worker_node_processes`   | `worker_node`   | `docker restart <node>`                    | ✅           |
+| **kubelet**                 | `kill_kubelet`                 | `worker_node`   | `pkill kubelet`                            | ✅           |
+| **kube-proxy**              | `delete_kube_proxy`            | `worker_node`   | `kubectl delete pod -l k8s-app=kube-proxy` | ✅           |
+| **containerd**              | `restart_containerd`           | `worker_node`   | `docker restart <node>`                    | ✅           |
+| **Control Plane (todos)**   | `kill_control_plane_processes` | `control_plane` | `docker restart control-plane`             | ✅           |
+| **kube-apiserver**          | `kill_kube_apiserver`          | `control_plane` | `pkill kube-apiserver`                     | ✅           |
+| **kube-controller-manager** | `kill_kube_controller_manager` | `control_plane` | `pkill kube-controller`                    | ✅           |
+| **kube-scheduler**          | `kill_kube_scheduler`          | `control_plane` | `pkill kube-scheduler`                     | ✅           |
+| **etcd**                    | `kill_etcd`                    | `control_plane` | `pkill etcd`                               | ✅           |
 
 ## 🎯 Alvos Disponíveis
 
@@ -407,5 +406,5 @@ python3 reliability_tester.py --component control_plane --failure-method kill_et
 
 ---
 
-**Criado em:** 15 de Outubro de 2025  
+**Criado em:** 15 de Outubro de 2025
 **Framework:** Reliability Testing for Kubernetes (Kind)

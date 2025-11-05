@@ -60,9 +60,7 @@ class ReliabilityConfig:
     
     def __post_init__(self):
         """Inicialização pós-criação do objeto."""
-        # Detectar contexto automaticamente se não especificado
-        if not self.context:
-            self.context = self._detect_current_context()
+        # Contexto será detectado pelo ConfigManager posteriormente
         
         # Configurar serviços padrão se não especificados
         if self.services is None:
@@ -71,6 +69,45 @@ class ReliabilityConfig:
         
         # Criar diretório de relatórios se não existir
         os.makedirs(self.reports_dir, exist_ok=True)
+
+
+class ConfigManager:
+    """
+    Gerenciador de configurações do framework.
+    
+    Carrega configurações de arquivos, variáveis de ambiente
+    e permite sobreposição de valores dinamicamente.
+    """
+    
+    def __init__(self, config_file: Optional[str] = None, aws_mode: bool = False):
+        """
+        Inicializa o gerenciador de configurações.
+        
+        Args:
+            config_file: Caminho para arquivo de configuração (opcional)
+            aws_mode: Se True, usa configurações para AWS (sem detecção de contexto kubectl)
+        """
+        self.config = ReliabilityConfig()
+        self.config_file = config_file
+        self.aws_mode = aws_mode
+        
+        self._load_from_environment()
+        
+        if config_file and os.path.exists(config_file):
+            self._load_from_file(config_file)
+            
+        # No modo AWS, não detectar contexto kubectl
+        if not aws_mode:
+            self._detect_and_set_context()
+        else:
+            # No modo AWS, usar contexto especial
+            self.config.context = "aws-remote"
+    
+    def _detect_and_set_context(self):
+        """Detecta e define o contexto kubectl automaticamente."""
+        context = self._detect_current_context()
+        if context:
+            self.config.context = context
     
     def _detect_current_context(self) -> str:
         """
@@ -110,29 +147,6 @@ class ReliabilityConfig:
         
         print("⚠️ Nenhum contexto válido encontrado - usando padrão 'default'")
         return "default"
-
-
-class ConfigManager:
-    """
-    Gerenciador de configurações do framework.
-    
-    Carrega configurações de arquivos, variáveis de ambiente
-    e permite sobreposição de valores dinamicamente.
-    """
-    
-    def __init__(self, config_file: Optional[str] = None):
-        """
-        Inicializa o gerenciador de configurações.
-        
-        Args:
-            config_file: Caminho para arquivo de configuração (opcional)
-        """
-        self.config = ReliabilityConfig()
-        self.config_file = config_file
-        self._load_from_environment()
-        
-        if config_file and os.path.exists(config_file):
-            self._load_from_file(config_file)
     
     def _load_from_environment(self):
         """Carrega configurações de variáveis de ambiente."""
@@ -347,15 +361,21 @@ class ConfigManager:
 
 # ⭐ CONFIGURAÇÃO GLOBAL PADRÃO ⭐
 # Esta é a instância global que pode ser acessada de qualquer lugar
-DEFAULT_CONFIG = ConfigManager()
+DEFAULT_CONFIG = None
 
-def get_config() -> ReliabilityConfig:
+def get_config(aws_mode: bool = False) -> ReliabilityConfig:
     """
     Retorna configuração global padrão.
+    
+    Args:
+        aws_mode: Se True, usa configurações para AWS (sem contexto kubectl local)
     
     Returns:
         Configuração padrão
     """
+    global DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None or getattr(DEFAULT_CONFIG, 'aws_mode', False) != aws_mode:
+        DEFAULT_CONFIG = ConfigManager(aws_mode=aws_mode)
     return DEFAULT_CONFIG.get_config()
 
 def update_global_config(**kwargs):
@@ -365,6 +385,9 @@ def update_global_config(**kwargs):
     Args:
         **kwargs: Configurações para atualizar
     """
+    global DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None:
+        DEFAULT_CONFIG = ConfigManager()
     DEFAULT_CONFIG.update_config(**kwargs)
 
 def set_global_recovery_timeout(timeout_type_or_value):
@@ -380,6 +403,9 @@ def set_global_recovery_timeout(timeout_type_or_value):
         set_global_recovery_timeout('short')  # 120s
         set_global_recovery_timeout(450)      # 450s
     """
+    global DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None:
+        DEFAULT_CONFIG = ConfigManager()
     DEFAULT_CONFIG.set_recovery_timeout(timeout_type_or_value)
 
 def get_current_recovery_timeout() -> int:
@@ -389,8 +415,14 @@ def get_current_recovery_timeout() -> int:
     Returns:
         Timeout atual em segundos
     """
+    global DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None:
+        DEFAULT_CONFIG = ConfigManager()
     return DEFAULT_CONFIG.get_current_timeout()
 
 def list_timeout_options():
     """Lista opções de timeout disponíveis globalmente."""
+    global DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None:
+        DEFAULT_CONFIG = ConfigManager()
     DEFAULT_CONFIG.list_timeout_options()

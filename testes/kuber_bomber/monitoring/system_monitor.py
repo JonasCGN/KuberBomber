@@ -5,9 +5,10 @@ Monitor de Sistema
 Módulo para monitoramento de componentes do sistema Kubernetes.
 """
 
-import subprocess
+import json
 from typing import List, Optional
 from ..utils.config import get_config
+from ..utils.kubectl_executor import get_kubectl_executor
 
 
 class SystemMonitor:
@@ -17,9 +18,17 @@ class SystemMonitor:
     Monitora pods, nós e outros recursos do sistema.
     """
     
-    def __init__(self):
-        """Inicializa o monitor de sistema."""
-        self.config = get_config()
+    def __init__(self, aws_config: Optional[dict] = None):
+        """
+        Inicializa o monitor de sistema.
+        
+        Args:
+            aws_config: Configuração AWS para conexão remota
+        """
+        self.aws_config = aws_config
+        self.is_aws_mode = aws_config is not None
+        self.config = get_config(aws_mode=self.is_aws_mode)
+        self.kubectl = get_kubectl_executor(aws_config)
     
     def get_pods(self) -> List[str]:
         """
@@ -29,17 +38,11 @@ class SystemMonitor:
             Lista com nomes dos pods encontrados
         """
         try:
-            result = subprocess.run([
-                'kubectl', 'get', 'pods', '-l', 'app in (foo,bar,test)', 
-                '-o', 'jsonpath={.items[*].metadata.name}', '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
-            
-            pods = result.stdout.strip().split()
-            pods = [pod for pod in pods if pod]  # Filtrar strings vazias
+            pods = self.kubectl.get_pods()
             print(f"📋 Pods encontrados: {pods}")
             return pods
             
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             print(f"❌ Erro ao obter pods: {e}")
             return []
     
@@ -51,33 +54,42 @@ class SystemMonitor:
             Lista com nomes dos worker nodes
         """
         try:
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '-l', '!node-role.kubernetes.io/control-plane',
-                '-o', 'jsonpath={.items[*].metadata.name}', '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+            nodes = self.kubectl.get_nodes()
             
-            nodes = result.stdout.strip().split()
-            nodes = [node for node in nodes if node]  # Filtrar strings vazias
-            return nodes
+            # Filtrar apenas worker nodes (excluir control plane)
+            worker_nodes = []
+            for node in nodes:
+                result = self.kubectl.execute_kubectl([
+                    'get', 'node', node, 
+                    '-o', 'jsonpath={.metadata.labels.node-role\.kubernetes\.io/control-plane}'
+                ])
+                
+                # Se não tem o label de control-plane, é worker node
+                if result['success'] and not result['output'].strip():
+                    worker_nodes.append(node)
             
-        except subprocess.CalledProcessError as e:
+            return worker_nodes
+            
+        except Exception as e:
             print(f"❌ Erro ao obter worker nodes: {e}")
             return []
     
     def show_pod_status(self, highlight_pod: Optional[str] = None):
         """
-        Mostra status dos pods com kubectl get pods.
+        Mostra status dos pods com destaque opcional.
         
         Args:
-            highlight_pod: Pod específico para destacar (opcional)
+            highlight_pod: Nome do pod para destacar
         """
         try:
-            result = subprocess.run([
-                'kubectl', 'get', 'pods', '--context', self.config.context, '-o', 'wide'
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'pods', '-o', 'wide'])
+            
+            if not result['success']:
+                print(f"❌ Erro ao obter status dos pods: {result['error']}")
+                return
             
             print("📋 === STATUS DOS PODS ===")
-            lines = result.stdout.strip().split('\n')
+            lines = result['output'].strip().split('\n')
             for line in lines:
                 if highlight_pod and highlight_pod in line:
                     print(f"🎯 {line}")  # Destacar o pod alvo
@@ -85,23 +97,25 @@ class SystemMonitor:
                     print(f"   {line}")
             print()
             
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             print(f"❌ Erro ao obter status dos pods: {e}")
     
     def show_node_status(self):
         """Mostra status dos nós."""
         try:
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '--context', self.config.context, '-o', 'wide'
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'nodes', '-o', 'wide'])
             
-            print("🖥️ === STATUS DOS NÓS ===")
-            lines = result.stdout.strip().split('\n')
+            if not result['success']:
+                print(f"❌ Erro ao obter status dos nós: {result['error']}")
+                return
+            
+            print("� === STATUS DOS NÓS ===")
+            lines = result['output'].strip().split('\n')
             for line in lines:
                 print(f"   {line}")
             print()
             
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             print(f"❌ Erro ao obter status dos nós: {e}")
     
     def get_pod_logs(self, pod_name: str, lines: int = 50) -> str:
@@ -116,20 +130,21 @@ class SystemMonitor:
             Logs do pod
         """
         try:
-            result = subprocess.run([
-                'kubectl', 'logs', pod_name, '--context', self.config.context, 
-                '--tail', str(lines)
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl([
+                'logs', pod_name, '--tail', str(lines)
+            ])
             
-            return result.stdout
+            if not result['success']:
+                return f"❌ Erro ao obter logs do pod {pod_name}: {result['error']}"
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro ao obter logs do pod {pod_name}: {e}")
-            return ""
+            return result['output']
+            
+        except Exception as e:
+            return f"❌ Erro ao obter logs do pod {pod_name}: {e}"
     
     def describe_pod(self, pod_name: str) -> str:
         """
-        Obtém descrição detalhada de um pod.
+        Descreve um pod específico.
         
         Args:
             pod_name: Nome do pod
@@ -138,63 +153,64 @@ class SystemMonitor:
             Descrição do pod
         """
         try:
-            result = subprocess.run([
-                'kubectl', 'describe', 'pod', pod_name, '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['describe', 'pod', pod_name])
             
-            return result.stdout
+            if not result['success']:
+                return f"❌ Erro ao descrever pod {pod_name}: {result['error']}"
             
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erro ao descrever pod {pod_name}: {e}")
-            return ""
+            return result['output']
+            
+        except Exception as e:
+            return f"❌ Erro ao descrever pod {pod_name}: {e}"
     
     def get_control_plane_node(self) -> Optional[str]:
         """
         Obtém o nome do nó control plane.
         
         Returns:
-            Nome do nó control plane ou string padrão
+            Nome do nó control plane ou None se não encontrado
         """
         try:
             # Tentar obter control plane automaticamente
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '-l', 'node-role.kubernetes.io/control-plane',
-                '-o', 'jsonpath={.items[0].metadata.name}', '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl([
+                'get', 'nodes', '-l', 'node-role.kubernetes.io/control-plane',
+                '-o', 'jsonpath={.items[0].metadata.name}'
+            ])
             
-            control_plane = result.stdout.strip()
-            if control_plane:
-                return control_plane
+            if result['success']:
+                control_plane = result['output'].strip()
+                if control_plane:
+                    return control_plane
             
             # Fallback: tentar master label
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '-l', 'node-role.kubernetes.io/master',
-                '-o', 'jsonpath={.items[0].metadata.name}', '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl([
+                'get', 'nodes', '-l', 'node-role.kubernetes.io/master',
+                '-o', 'jsonpath={.items[0].metadata.name}'
+            ])
             
-            control_plane = result.stdout.strip()
-            if control_plane:
-                return control_plane
+            if result['success']:
+                control_plane = result['output'].strip()
+                if control_plane:
+                    return control_plane
             
             # Fallback: procurar por qualquer node com control-plane no nome
-            result = subprocess.run([
-                'kubectl', 'get', 'nodes', '-o', 'json', '--context', self.config.context
-            ], capture_output=True, text=True, check=True)
+            result = self.kubectl.execute_kubectl(['get', 'nodes', '-o', 'json'])
             
-            import json
-            nodes_data = json.loads(result.stdout)
-            
-            for node in nodes_data.get('items', []):
-                node_name = node['metadata']['name']
-                if any(term in node_name.lower() for term in ['control-plane', 'master', 'controlplane']):
-                    return node_name
+            if result['success']:
+                nodes_data = json.loads(result['output'])
+                
+                for node in nodes_data.get('items', []):
+                    node_name = node['metadata']['name']
+                    if any(term in node_name.lower() for term in ['control-plane', 'master', 'controlplane']):
+                        return node_name
             
             # Se chegou até aqui, não conseguiu descobrir automaticamente
-            raise Exception("Nenhum control plane descoberto automaticamente")
+            print("❌ Nenhum control plane descoberto automaticamente")
+            return None
             
         except Exception as e:
             print(f"❌ Erro ao descobrir control plane automaticamente: {e}")
-            return None  # Retornar None em vez de hardcode
+            return None
     
     def check_cluster_health(self) -> dict:
         """
@@ -214,46 +230,40 @@ class SystemMonitor:
         
         try:
             # Verificar acesso ao cluster
-            result = subprocess.run([
-                'kubectl', 'cluster-info', '--context', self.config.context
-            ], capture_output=True, text=True, timeout=10)
+            result = self.kubectl.execute_kubectl(['cluster-info'])
             
-            health_status['cluster_accessible'] = result.returncode == 0
+            health_status['cluster_accessible'] = result['success']
             
             if health_status['cluster_accessible']:
                 # Verificar nós
-                result = subprocess.run([
-                    'kubectl', 'get', 'nodes', '--context', self.config.context,
-                    '--no-headers'
-                ], capture_output=True, text=True, check=True)
+                result = self.kubectl.execute_kubectl(['get', 'nodes', '--no-headers'])
                 
-                node_lines = result.stdout.strip().split('\n')
-                health_status['total_nodes'] = len([line for line in node_lines if line])
-                
-                ready_nodes = 0
-                for line in node_lines:
-                    if 'Ready' in line and 'NotReady' not in line:
-                        ready_nodes += 1
-                        if 'control-plane' in line or 'master' in line:
-                            health_status['control_plane_ready'] = True
-                
-                health_status['worker_nodes_ready'] = ready_nodes
+                if result['success']:
+                    node_lines = result['output'].strip().split('\n')
+                    health_status['total_nodes'] = len([line for line in node_lines if line])
+                    
+                    ready_nodes = 0
+                    for line in node_lines:
+                        if 'Ready' in line and 'NotReady' not in line:
+                            ready_nodes += 1
+                            if 'control-plane' in line or 'master' in line:
+                                health_status['control_plane_ready'] = True
+                    
+                    health_status['worker_nodes_ready'] = ready_nodes
                 
                 # Verificar pods
-                result = subprocess.run([
-                    'kubectl', 'get', 'pods', '--all-namespaces', '--context', self.config.context,
-                    '--no-headers'
-                ], capture_output=True, text=True, check=True)
+                result = self.kubectl.execute_kubectl(['get', 'pods', '--all-namespaces', '--no-headers'])
                 
-                pod_lines = result.stdout.strip().split('\n')
-                health_status['total_pods'] = len([line for line in pod_lines if line])
-                
-                running_pods = 0
-                for line in pod_lines:
-                    if 'Running' in line:
-                        running_pods += 1
-                
-                health_status['pods_running'] = running_pods
+                if result['success']:
+                    pod_lines = result['output'].strip().split('\n')
+                    health_status['total_pods'] = len([line for line in pod_lines if line])
+                    
+                    running_pods = 0
+                    for line in pod_lines:
+                        if 'Running' in line:
+                            running_pods += 1
+                    
+                    health_status['pods_running'] = running_pods
             
         except Exception as e:
             print(f"⚠️ Erro ao verificar saúde do cluster: {e}")
