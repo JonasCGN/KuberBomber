@@ -9,6 +9,7 @@ import subprocess
 import json
 from typing import Dict, List, Tuple, Optional
 from ..core.config_simples import ConfigSimples
+from .kubectl_executor import KubectlExecutor
 
 
 class PodLimiter:
@@ -16,14 +17,16 @@ class PodLimiter:
     Gerencia a limitação de pods por worker node baseado no ConfigSimples.
     """
     
-    def __init__(self, config_simples: Optional[ConfigSimples] = None):
+    def __init__(self, config_simples: Optional[ConfigSimples] = None, kubectl_executor: Optional[KubectlExecutor] = None):
         """
         Inicializa o limitador de pods.
         
         Args:
             config_simples: Configuração com limites de pods por worker
+            kubectl_executor: Executor de kubectl (local ou AWS)
         """
         self.config_simples = config_simples or ConfigSimples()
+        self.kubectl_executor = kubectl_executor or KubectlExecutor()
         
     def get_node_pod_limit(self, node_name: str) -> int:
         """
@@ -49,15 +52,14 @@ class PodLimiter:
             Set com nomes das aplicações descobertas
         """
         try:
-            # Obter pods do namespace default
-            cmd = ['kubectl', 'get', 'pods', '-n', 'default', '-o', 'json']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            # Obter pods do namespace default usando kubectl_executor
+            result = self.kubectl_executor.execute_kubectl(['get', 'pods', '-n', 'default', '-o', 'json'])
             
-            if result.returncode != 0:
-                print(f"❌ Erro ao obter pods do namespace default: {result.stderr}")
+            if not result['success']:
+                print(f"❌ Erro ao obter pods do namespace default: {result['error']}")
                 return set()
             
-            pods_data = json.loads(result.stdout)
+            pods_data = json.loads(result['output'])
             discovered_apps = set()
             
             for pod in pods_data.get('items', []):
@@ -88,19 +90,18 @@ class PodLimiter:
             onde pods_aplicacao_com_namespace é lista de dicts com {'name': str, 'namespace': str}
         """
         try:
-            # Obter todos os pods do nó
-            cmd = [
-                'kubectl', 'get', 'pods', '--all-namespaces', 
+            # Obter todos os pods do nó usando kubectl_executor
+            result = self.kubectl_executor.execute_kubectl([
+                'get', 'pods', '--all-namespaces', 
                 '--field-selector', f'spec.nodeName={node_name}',
                 '-o', 'json'
-            ]
+            ])
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                print(f"❌ Erro ao obter pods do nó {node_name}: {result.stderr}")
+            if not result['success']:
+                print(f"❌ Erro ao obter pods do nó {node_name}: {result['error']}")
                 return [], []
             
-            pods_data = json.loads(result.stdout)
+            pods_data = json.loads(result['output'])
             
             # Separar pods do sistema de pods de aplicação
             system_pods = []
@@ -220,14 +221,13 @@ class PodLimiter:
                     pod_name = pod_info
                     namespace = 'default'
                 
-                # Deletar o pod
-                delete_cmd = ['kubectl', 'delete', 'pod', pod_name, '-n', namespace, '--force', '--grace-period=0']
-                delete_result = subprocess.run(delete_cmd, capture_output=True, text=True, timeout=30)
+                # Deletar o pod usando kubectl_executor
+                result = self.kubectl_executor.execute_kubectl(['delete', 'pod', pod_name, '-n', namespace, '--force', '--grace-period=0'])
                 
-                if delete_result.returncode == 0:
+                if result['success']:
                     print(f"  ✅ Pod {pod_name} (namespace: {namespace}) removido")
                 else:
-                    print(f"  ❌ Falha ao remover pod {pod_name}: {delete_result.stderr}")
+                    print(f"  ❌ Falha ao remover pod {pod_name}: {result['error']}")
                     
             return True
             
@@ -247,27 +247,25 @@ class PodLimiter:
         """
         try:
             for pod_name in pod_names:
-                # Tentar obter namespace do pod
-                cmd = [
-                    'kubectl', 'get', 'pod', pod_name, '--all-namespaces',
+                # Tentar obter namespace do pod usando kubectl_executor
+                result = self.kubectl_executor.execute_kubectl([
+                    'get', 'pod', pod_name, '--all-namespaces',
                     '-o', 'jsonpath={.metadata.namespace}'
-                ]
+                ])
                 
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                if result.returncode != 0:
+                if not result['success']:
                     print(f"❌ Não foi possível obter namespace do pod {pod_name}")
                     continue
                     
-                namespace = result.stdout.strip()
+                namespace = result['output'].strip()
                 
-                # Deletar o pod
-                delete_cmd = ['kubectl', 'delete', 'pod', pod_name, '-n', namespace, '--force']
-                delete_result = subprocess.run(delete_cmd, capture_output=True, text=True, timeout=30)
+                # Deletar o pod usando kubectl_executor
+                delete_result = self.kubectl_executor.execute_kubectl(['delete', 'pod', pod_name, '-n', namespace, '--force'])
                 
-                if delete_result.returncode == 0:
+                if delete_result['success']:
                     print(f"  ✅ Pod {pod_name} removido")
                 else:
-                    print(f"  ❌ Falha ao remover pod {pod_name}: {delete_result.stderr}")
+                    print(f"  ❌ Falha ao remover pod {pod_name}: {delete_result['error']}")
                     
             return True
             

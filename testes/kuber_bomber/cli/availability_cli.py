@@ -148,23 +148,51 @@ O simulador irá:
         help='Usar ConfigSimples para configuração de MTTF/MTTR detalhada'
     )
     
+    parser.add_argument(
+        '--force-aws',
+        action='store_true',
+        help='Forçar modo AWS mesmo se ConfigSimples não estiver habilitado'
+    )
+    
     args = parser.parse_args()
     
-    # Criar simulador
-    simulator = AvailabilitySimulator()
+    # Verificar se deve usar ConfigSimples e configuração AWS
+    aws_config = None
+    config_simples = None
     
-    # Verificar se deve usar ConfigSimples
-    if args.use_config_simples:
+    if args.use_config_simples or args.force_aws:
         from kuber_bomber.core.config_simples import ConfigSimples
         
-        print("🔧 === CONFIGURAÇÃO SIMPLIFICADA ===")
-        print("Usando ConfigSimples para MTTF/MTTR detalhado...")
-        print()
+        if args.use_config_simples:
+            print("🔧 === CONFIGURAÇÃO SIMPLIFICADA ===")
+            print("Usando ConfigSimples para MTTF/MTTR detalhado...")
+            print()
         
         # Criar configuração simples
         config_simples = ConfigSimples()
-        config_simples.print_summary()
         
+        # Verificar se AWS está habilitado no ConfigSimples ou forçado
+        if config_simples.aws_enabled or args.force_aws:
+            print("☁️ === MODO AWS DETECTADO ===")
+            aws_config = config_simples.get_aws_config()
+            print(f"🌐 Conectando via SSH: {aws_config['ssh_user']}@{aws_config['ssh_host']}")
+            print(f"🔑 Chave SSH: {aws_config['ssh_key']}")
+            print(f"📱 Aplicações: {', '.join(aws_config['applications'])}")
+            print()
+        
+        if args.use_config_simples:
+            config_simples.print_summary()
+    
+    # Criar simulador com configuração AWS se detectada
+    if aws_config:
+        print("🚀 Inicializando simulador em modo AWS...")
+        simulator = AvailabilitySimulator(aws_config=aws_config)
+    else:
+        print("🚀 Inicializando simulador em modo local...")
+        simulator = AvailabilitySimulator()
+    
+    # Aplicar ConfigSimples se especificado
+    if args.use_config_simples and config_simples:
         # Aplicar configuração ao simulador
         simulator._apply_config_simples(config_simples)
         print("✅ ConfigSimples aplicado ao simulador")

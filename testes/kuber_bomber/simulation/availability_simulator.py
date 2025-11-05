@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from ..failure_injectors.pod_injector import PodFailureInjector
 from ..failure_injectors.node_injector import NodeFailureInjector
 from ..failure_injectors.control_plane_injector import ControlPlaneInjector
+from ..failure_injectors.aws_injector import AWSFailureInjector
 from ..monitoring.health_checker import HealthChecker
 from ..reports.csv_reporter import CSVReporter
 from ..utils.pod_limiter import PodLimiter
@@ -157,7 +158,24 @@ class AvailabilitySimulator:
         # Configurar critérios de disponibilidade baseado nos componentes descobertos
         self._setup_default_availability_criteria()
         
-        # Injetores de falha
+        # Injetores de falha - usar AWS quando estiver em modo AWS
+        if self.is_aws_mode and aws_config:
+            print("🔧 Inicializando injetores AWS...")
+            ssh_host = aws_config.get('ssh_host', '')
+            if not ssh_host:
+                raise ValueError("ssh_host é obrigatório para modo AWS")
+            
+            self.aws_injector = AWSFailureInjector(
+                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem'),
+                ssh_host=ssh_host,
+                ssh_user=aws_config.get('ssh_user', 'ubuntu')
+            )
+            print(f"✅ AWS injector configurado para {ssh_host}")
+        else:
+            print("🔧 Inicializando injetores locais...")
+            self.aws_injector = None
+            
+        # Sempre inicializar injetores locais (como fallback)
         self.pod_injector = PodFailureInjector()
         self.node_injector = NodeFailureInjector()
         self.control_plane_injector = ControlPlaneInjector()
@@ -1039,15 +1057,27 @@ class AvailabilitySimulator:
                     
                     # Executar método escolhido aleatoriamente
                     if failure_method == "kill_all_processes":
-                        success = self.pod_injector.kill_all_processes(pod_name)
-                        print(f"  🎯 Comando: kubectl exec {pod_name} -- kill -9 -1")
+                        if self.is_aws_mode and self.aws_injector:
+                            success, _ = self.aws_injector.kill_all_processes(pod_name)
+                            print(f"  🎯 Comando AWS: kill all processes via SSH")
+                        else:
+                            success = self.pod_injector.kill_all_processes(pod_name)
+                            print(f"  🎯 Comando: kubectl exec {pod_name} -- kill -9 -1")
                     elif failure_method == "kill_init_process":
-                        success = self.pod_injector.kill_init_process(pod_name)
-                        print(f"  🎯 Comando: kubectl exec {pod_name} -- kill -9 1")
+                        if self.is_aws_mode and self.aws_injector:
+                            success, _ = self.aws_injector.kill_init_process(pod_name)
+                            print(f"  🎯 Comando AWS: kill init process via SSH")
+                        else:
+                            success = self.pod_injector.kill_init_process(pod_name)
+                            print(f"  🎯 Comando: kubectl exec {pod_name} -- kill -9 1")
                     else:
                         # Fallback para kill_all_processes
-                        success = self.pod_injector.kill_all_processes(pod_name)
-                        print(f"  🎯 Comando (fallback): kubectl exec {pod_name} -- kill -9 -1")
+                        if self.is_aws_mode and self.aws_injector:
+                            success, _ = self.aws_injector.kill_all_processes(pod_name)
+                            print(f"  🎯 Comando AWS (fallback): kill all processes via SSH")
+                        else:
+                            success = self.pod_injector.kill_all_processes(pod_name)
+                            print(f"  🎯 Comando (fallback): kubectl exec {pod_name} -- kill -9 -1")
                 else:
                     print(f"  ❌ Pod {component.name} não encontrado")
                     return False
@@ -1055,56 +1085,109 @@ class AvailabilitySimulator:
             elif component.component_type == "node":
                 # Executar método escolhido aleatoriamente para nodes
                 if failure_method == "kill_worker_node_processes":
-                    success, _ = self.node_injector.kill_worker_node_processes(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (kill worker processes)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_worker_node_processes(component.name)
+                        print(f"  🎯 Comando AWS: kill worker processes via SSH")
+                    else:
+                        success, _ = self.node_injector.kill_worker_node_processes(component.name)
+                        print(f"  🎯 Falha injetada no node: {component.name} (kill worker processes)")
                 elif failure_method == "kill_kubelet":
-                    success, _ = self.control_plane_injector.kill_kubelet(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (kill kubelet)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_kubelet(component.name)
+                        print(f"  🎯 Comando AWS: kill kubelet via SSH")
+                    else:
+                        success, _ = self.control_plane_injector.kill_kubelet(component.name)
+                        print(f"  🎯 Falha injetada no node: {component.name} (kill kubelet)")
                 elif failure_method == "delete_kube_proxy":
                     print(f"  🔄 Iniciando delete_kube_proxy para {component.name}...")
-                    success, command = self.control_plane_injector.delete_kube_proxy_pod(component.name)
-                    if success:
-                        print(f"  ✅ Falha injetada no node: {component.name} (delete kube-proxy)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.delete_kube_proxy_pod(component.name)
+                        print(f"  🎯 Comando AWS: delete kube-proxy via SSH")
                     else:
-                        print(f"  ⚠️ Falha parcial no node: {component.name} (delete kube-proxy) - continuando...")
-                        success = True  # Não parar simulação por falha no kube-proxy
+                        success, command = self.control_plane_injector.delete_kube_proxy_pod(component.name)
+                        if success:
+                            print(f"  ✅ Falha injetada no node: {component.name} (delete kube-proxy)")
+                        else:
+                            print(f"  ⚠️ Falha parcial no node: {component.name} (delete kube-proxy) - continuando...")
+                            success = True  # Não parar simulação por falha no kube-proxy
                     print(f"  🔄 Finalizou delete_kube_proxy para {component.name}")
                 elif failure_method == "restart_containerd":
-                    success, _ = self.control_plane_injector.restart_containerd(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (restart containerd)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.restart_containerd(component.name)
+                        print(f"  🎯 Comando AWS: restart containerd via SSH")
+                    else:
+                        success, _ = self.control_plane_injector.restart_containerd(component.name)
+                        print(f"  🎯 Falha injetada no node: {component.name} (restart containerd)")
                 elif failure_method == "shutdown_worker_node":
-                    # Lógica especial para shutdown de VM
-                    success = self._handle_shutdown_worker_node(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (shutdown VM)")
+                    if self.is_aws_mode and self.aws_injector:
+                        # Para AWS, usar restart em vez de shutdown específico
+                        success, _ = self.aws_injector.kill_worker_node_processes(component.name)
+                        print(f"  🎯 Comando AWS: shutdown worker node via SSH (usando kill_worker_node_processes)")
+                    else:
+                        # Lógica especial para shutdown de VM
+                        success = self._handle_shutdown_worker_node(component.name)
+                        print(f"  🎯 Falha injetada no node: {component.name} (shutdown VM)")
                 else:
                     # Fallback
-                    success, _ = self.node_injector.kill_worker_node_processes(component.name)
-                    print(f"  🎯 Falha injetada no node: {component.name} (fallback)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_worker_node_processes(component.name)
+                        print(f"  🎯 Comando AWS (fallback): kill worker processes via SSH")
+                    else:
+                        success, _ = self.node_injector.kill_worker_node_processes(component.name)
+                        print(f"  🎯 Falha injetada no node: {component.name} (fallback)")
                 
             elif component.component_type == "control_plane":
                 # Executar método escolhido aleatoriamente para control plane
                 if failure_method == "kill_control_plane_processes":
-                    success = self.node_injector.kill_control_plane_processes(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (kill all processes)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_control_plane_processes(component.name)
+                        print(f"  🎯 Comando AWS: kill control plane processes via SSH")
+                    else:
+                        success = self.node_injector.kill_control_plane_processes(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (kill all processes)")
                 elif failure_method == "kill_kube_apiserver":
-                    success = self.control_plane_injector.kill_kube_apiserver(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (kill apiserver)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_kube_apiserver(component.name)
+                        print(f"  🎯 Comando AWS: kill apiserver via SSH")
+                    else:
+                        success = self.control_plane_injector.kill_kube_apiserver(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (kill apiserver)")
                 elif failure_method == "kill_kube_controller_manager":
-                    success = self.control_plane_injector.kill_kube_controller_manager(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (kill controller-manager)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_kube_controller_manager(component.name)
+                        print(f"  🎯 Comando AWS: kill controller-manager via SSH")
+                    else:
+                        success = self.control_plane_injector.kill_kube_controller_manager(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (kill controller-manager)")
                 elif failure_method == "kill_kube_scheduler":
-                    success = self.control_plane_injector.kill_kube_scheduler(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (kill scheduler)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_kube_scheduler(component.name)
+                        print(f"  🎯 Comando AWS: kill scheduler via SSH")
+                    else:
+                        success = self.control_plane_injector.kill_kube_scheduler(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (kill scheduler)")
                 elif failure_method == "kill_etcd":
-                    success = self.control_plane_injector.kill_etcd(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (kill etcd)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_etcd(component.name)
+                        print(f"  🎯 Comando AWS: kill etcd via SSH")
+                    else:
+                        success = self.control_plane_injector.kill_etcd(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (kill etcd)")
                 elif failure_method == "restart_containerd":
-                    success = self.control_plane_injector.restart_containerd(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (restart containerd)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.restart_containerd(component.name)
+                        print(f"  🎯 Comando AWS: restart containerd via SSH")
+                    else:
+                        success = self.control_plane_injector.restart_containerd(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (restart containerd)")
                 else:
                     # Fallback
-                    success = self.node_injector.kill_control_plane_processes(component.name)
-                    print(f"  🎯 Falha no control plane: {component.name} (fallback)")
+                    if self.is_aws_mode and self.aws_injector:
+                        success, _ = self.aws_injector.kill_control_plane_processes(component.name)
+                        print(f"  🎯 Comando AWS (fallback): kill control plane processes via SSH")
+                    else:
+                        success = self.node_injector.kill_control_plane_processes(component.name)
+                        print(f"  🎯 Falha no control plane: {component.name} (fallback)")
                 
             else:
                 print(f"  ❌ Tipo de componente desconhecido: {component.component_type}")

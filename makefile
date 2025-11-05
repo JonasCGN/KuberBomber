@@ -123,9 +123,9 @@ run_simulation:
 # 	source ~/venvs/py3env/bin/activate && 
 	cd ./testes && python3 -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5 --use-config-simples
 
-run_test_pode_limiter:
-# 	cd testes && python3 test_pod_limits_integration.py
-	cd testes && python3 test_pod_limiter_fix.py
+run_simulation_aws:
+# 	source ~/venvs/py3env/bin/activate && 
+	cd ./testes && PYTHONPATH=/media/jonascgn/Jonas/Artigos/1_Artigo/testes python3 -m kuber_bomber.cli.availability_cli --duration 24 --iterations 5 --use-config-simples --force-aws
 
 ssh_cli_cp:
 	ssh -i ~/.ssh/vockey.pem ubuntu@98.80.193.224
