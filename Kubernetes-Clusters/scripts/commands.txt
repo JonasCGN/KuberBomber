@@ -1,8 +1,0 @@
-docker stop $(docker ps -q --filter "label=io.x-k8s.kind.cluster=local-k8s")
-
-docker system prune -f
-
-docker start $(docker ps -a -q --filter "label=io.x-k8s.kind.cluster=local-k8s")
-
-./scripts/deploy.sh --local --clean
-
