@@ -13,7 +13,9 @@ import sys
 import os
 
 # Adicionar path para imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Adicionar parent directory (volta uma pasta)
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+sys.path.insert(0, parent_dir)
 
 def main():
     """Ponto de entrada principal."""
@@ -25,7 +27,7 @@ def main():
         print("🔧 Verificando estrutura do framework...")
         
         # Debug das importações
-        framework_path = os.path.join(os.path.dirname(__file__), 'kuber_bomber')
+        framework_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
         if not os.path.exists(framework_path):
             print(f"❌ Diretório não encontrado: {framework_path}")
             return

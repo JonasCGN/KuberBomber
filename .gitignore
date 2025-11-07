@@ -3,3 +3,8 @@
 **.csv
 **.png
 backup
+
+__pycache__/
+
+**/aws_config.json
+**/config_simples_used.json

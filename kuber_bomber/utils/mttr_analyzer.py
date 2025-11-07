@@ -83,14 +83,10 @@ class MTTRAnalyzer:
                 
             print(f"🎯 Testando aplicação: {app_name}")
             
-            # Descobrir pods da aplicação
-            pods = self._discover_app_pods(app_name)
-            
-            for pod_name in pods:
-                # Testar pod
-                self._test_pod_component(pod_name, 'kill_processes')
-                # Testar container
-                self._test_pod_component(f"container-{pod_name}", 'kill_init')
+            # Testar pod
+            self._test_pod_component(app_name, 'kill_processes')
+            # Testar container
+            self._test_pod_component(app_name, 'kill_init')
     
     def _test_worker_node_components(self, worker_nodes: Dict[str, bool]):
         """Testa componentes de worker node."""
@@ -279,7 +275,7 @@ class MTTRAnalyzer:
                 '--failure-method', failure_method,
                 '--target', target,
                 '--iterations', '1',
-                '--interval', '5'  # Reduzido para ser mais rápido
+                '--interval', '5'
             ]
             
             if timeout == 'extended':
@@ -293,9 +289,7 @@ class MTTRAnalyzer:
             cmd_str = ' '.join(cmd)
             print(f"    🚀 Executando: {cmd_str}")
             
-            # Definir timeout baseado no tipo e método de falha
             if failure_method in ['kill_worker_node_processes', 'kill_control_plane_processes'] and self.use_aws:
-                # Testes AWS com reboot precisam de mais tempo
                 test_timeout = 180  # 3 minutos para permitir reboot completo
             elif timeout == 'extended':
                 test_timeout = 150
@@ -306,7 +300,7 @@ class MTTRAnalyzer:
             # Executar teste
             result = subprocess.run(
                 cmd,
-                cwd='/mnt/Jonas/Projetos/Artigos/1_Artigo/testes',
+                cwd=os.getcwd()+"/kuber_bomber",
                 capture_output=True,
                 text=True,
                 timeout=test_timeout,

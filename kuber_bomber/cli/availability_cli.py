@@ -41,7 +41,14 @@ def generate_config_with_discovery(use_aws: bool = False,
     # Carregar configuração AWS se necessário
     aws_config = None
     if use_aws:
-        aws_config_data = ConfigSimples.load_aws_config("aws_config.json")
+        # arquivo aws_config.json na pasta 'configs' um nível acima deste script
+        path_aws_config = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "configs",
+            "aws_config.json"
+        )
+        
+        aws_config_data = ConfigSimples.load_aws_config(path_aws_config)
         if aws_config_data:
             aws_config = {
                 'ssh_host': aws_config_data.get('ssh_host'),
@@ -50,7 +57,7 @@ def generate_config_with_discovery(use_aws: bool = False,
             }
             print(f"☁️ Modo AWS ativado: {aws_config['ssh_user']}@{aws_config['ssh_host']}")
         else:
-            print("❌ Configuração AWS não encontrada em aws_config.json")
+            print(f"❌ Configuração AWS não encontrada em {path_aws_config}")
             return ""
     
     # Criar discovery

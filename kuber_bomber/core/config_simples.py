@@ -96,7 +96,7 @@ class ConfigSimples:
             return cls()
     
     @classmethod
-    def load_aws_config(cls, aws_config_file: str = "aws_config.json") -> Dict[str, Any]:
+    def load_aws_config(cls, aws_config_file: str = "config/aws_config.json") -> Dict[str, Any]:
         """
         Carrega configuração AWS de arquivo separado.
         
@@ -115,7 +115,7 @@ class ConfigSimples:
         
         return {}
     
-    def configure_aws(self, aws_config_file: str = "aws_config.json"):
+    def configure_aws(self, aws_config_file: str = "config/aws_config.json"):
         """
         Configura parâmetros AWS a partir de arquivo.
         

@@ -127,7 +127,7 @@ class InfrastructureDiscovery:
                     continue
                 
                 # Extrair nome da aplicação (antes do primeiro hífen com hash)
-                app_name = self._extract_app_name(pod_name)
+                app_name = pod_name
                 
                 if app_name:
                     if app_name not in pods_by_app:
@@ -326,9 +326,11 @@ class InfrastructureDiscovery:
 
         # Preencher experiment_config.applications e availability_criteria
         for app_name, pods in pods_by_app.items():
-            config["experiment_config"]["applications"][app_name] = True
-            # critério padrão: pelo menos 1 pod
-            config["availability_criteria"][app_name] = 1
+            for pod_name in pods:
+                # print(f"   • Adicionando aplicação: {pod_name}")
+                config["experiment_config"]["applications"][pod_name] = True
+                # critério padrão: pelo menos 1 pod
+                config["availability_criteria"][pod_name] = 1
 
         # Preencher experiment_config.worker_node (singular como no exemplo)
         for node_name in worker_nodes:
@@ -430,7 +432,7 @@ class InfrastructureDiscovery:
         
         # Salvar arquivo
         if output_file is None:
-            output_file = "config_simples_used.json"
+            output_file = os.getcwd() + "/kuber_bomber/configs/config_simples_used.json"
         
         filepath = self.save_config(config, output_file)
         

@@ -12,7 +12,6 @@ import os
 import sys
 from typing import Dict, Optional
 
-
 def load_aws_config() -> Optional[Dict]:
     """
     Carrega configuração AWS do arquivo aws_config.json.
@@ -20,7 +19,7 @@ def load_aws_config() -> Optional[Dict]:
     Returns:
         Dict com configuração AWS ou None se arquivo não existe/inválido
     """
-    config_path = "aws_config.json"
+    config_path = "configs/aws_config.json"
     
     # Verificar se arquivo existe
     if not os.path.exists(config_path):

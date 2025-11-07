@@ -1,0 +1,27 @@
+jonascgn@JonasCGN:/mnt/Jonas/Projetos/Artigos/1_Artigo$ aws ec2 describe-instances   --query "Reservations[].Instances[].{ID:InstanceId,Name:Tags[?Key=='Name']|[0].Value,PrivateIP:PrivateIpAddress,PublicIP:PublicIpAddress,State:State.Name}"
+[
+    {
+        "ID": "i-08b9879d75e24505a",
+        "Name": "WN1",
+        "PrivateIP": "10.0.0.241",
+        "PublicIP": "3.227.12.226",
+        "State": "running"
+    },
+    {
+        "ID": "i-06aaed1e617442887",
+        "Name": "ControlPlane",
+        "PrivateIP": "10.0.0.28",
+        "PublicIP": "3.218.207.41",
+        "State": "running"
+    },
+    {
+        "ID": "i-04b03d2d4f9475bff",
+        "Name": "WN0",
+        "PrivateIP": "10.0.0.98",
+        "PublicIP": "44.197.174.159",
+        "State": "running"
+    }
+]
+jonascgn@JonasCGN:/mnt/Jonas/Projetos/Artigos/1_Artigo$ 
+
+USAR ISSO PARA PROCURAR INSTANCIAS AWS NO FUTURO E FAZER O REABILITY TESTER USAR ISSO
