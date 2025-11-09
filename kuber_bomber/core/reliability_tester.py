@@ -113,10 +113,12 @@ class ReliabilityTester:
                 'kill_init': self.aws_injector.kill_init_process,
                 
                 # === WORKER NODE FAILURES ===
-                'kill_worker_node_processes': self.aws_injector.kill_worker_node_processes,
+                # 'kill_worker_node_processes': self.aws_injector.kill_worker_node_processes,
+                # 'shutdown_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método por ora
                 'restart_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método 
                 'kill_kubelet': self.aws_injector.kill_kubelet,
-                'shutdown_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método por ora
+                'delete_kube_proxy': self.aws_injector.delete_kube_proxy_pod,
+                'restart_containerd': self.aws_injector.restart_containerd,
                 
                 # === CONTROL PLANE FAILURES ===
                 'kill_control_plane_processes': self.aws_injector.kill_control_plane_processes,
@@ -125,9 +127,7 @@ class ReliabilityTester:
                 'kill_kube_scheduler': self.aws_injector.kill_kube_scheduler,
                 'kill_etcd': self.aws_injector.kill_etcd,
                 
-                # === NETWORK/RUNTIME FAILURES ===
-                'delete_kube_proxy': self.aws_injector.delete_kube_proxy_pod,
-                'restart_containerd': self.aws_injector.restart_containerd
+                
             }
         else:
             self.failure_methods = {
@@ -267,8 +267,8 @@ class ReliabilityTester:
                     print("🚀 Modo AWS: Usando verificação de pods via control plane...")
                     
                     # Mostrar pods atuais das aplicações
-                    all_pods = self.system_monitor.get_pods()
-                    print(f"📋 Pods das aplicações encontrados: {all_pods}")
+                    # all_pods = self.system_monitor.get_pods()
+                    # print(f"📋 Pods das aplicações encontrados: {all_pods}")
                     
                     # Verificar saúde das aplicações via control plane
                     # print("🔍 Verificando saúde das aplicações via control plane...")
@@ -470,8 +470,21 @@ class ReliabilityTester:
         try:
             if self.is_aws_mode:
                 # AWS: Usar kubectl via SSH
+                instances = self.aws_injector._get_aws_instances()
+            
+                # Encontrar o node_name do ControlPlane dentro do dicionário instances
+                control_plane_node = next(
+                    (k for k, v in instances.items() if v.get('Name') == 'ControlPlane' or v.get('Name', '').lower().startswith('control')),
+                    None
+                )
+                if not control_plane_node:
+                    print("   ❌ ControlPlane não encontrado em instances")
+                    return False
+
+                node_name = control_plane_node  # Ex.: 'ip-10-0-0-28'
+                
                 result = self.aws_injector._execute_ssh_command(
-                    'ip-10-0-0-28',
+                    node_name,
                     'sudo kubectl get pods --no-headers -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,READY:.status.containerStatuses[*].ready'
                 )
                 
@@ -785,84 +798,84 @@ class ReliabilityTester:
         return False
 
     def _wait_for_pod_recovery(self, target: str, component_type: str) -> Tuple[bool, float]:
-        """Aguarda recuperação via CURL - método principal de verificação."""
+        """Aguarda recuperação via CURL nos IPs dos pods usando threads."""
         import time
-        
+        from concurrent.futures import ThreadPoolExecutor
+
+        pods_info = self.kubectl.get_pods_info()
+        all_healthy = True
+            
         start_time = time.time()
         timeout = self.config.current_recovery_timeout
         check_interval = 2.0
-        
+
         print(f"⏳ Aguardando recuperação via CURL para {target}...")
         print(f"📊 Timeout: {timeout}s | Verificação a cada {check_interval}s")
-        
+
+        def fetch(pod_info):
+            pod_ip = pod_info.get('ip')
+            pod_port = pod_info.get('port')
+            pod_node = pod_info.get('node')
+            pod_name = pod_info.get('name')
+
+            if not pod_ip or not pod_port or not pod_node:
+                print(f"❌ IP, porta ou node não encontrados para pod: {pod_name}")
+                return False
+
+            url = f"http://{pod_ip}:{pod_port}/"
+            print(f"   🔗 Testando: {url} via SSH no node {pod_node}")
+
+            curl_cmd = f'curl -s -o /dev/null -w "%{{http_code}}" --max-time 3 {url}'
+            try:
+                curl_result = self.aws_injector._execute_ssh_command(
+                    pod_node,
+                    curl_cmd,
+                    timeout=5
+                )
+
+                if curl_result[0] and curl_result[1].strip():
+                    status_code = curl_result[1].strip()
+                    if status_code in ['200', '404']:
+                        print(f"   ✅ Aplicação respondeu: HTTP {status_code} (considerado ativo)")
+                        return True
+                    else:
+                        print(f"   ❌ Aplicação com erro: HTTP {status_code}")
+                        return False
+                else:
+                    print(f"   ❌ Curl falhou ou sem resposta")
+                    return False
+            except Exception as e:
+                print(f"   ⚠️ Erro no curl: {e}")
+                return False
+
         while time.time() - start_time < timeout:
             elapsed = time.time() - start_time
             check_num = int(elapsed / check_interval) + 1
-            
+
             print(f"\n🔍 Verificação #{check_num} (tempo: {elapsed:.1f}s/{timeout}s)")
-            
-            # MÉTODO PRINCIPAL: Verificar aplicação via CURL
-            app_healthy = self._check_pod_application_health(target)
-            
-            if app_healthy:
+
+            if pods_info:
+                with ThreadPoolExecutor(max_workers=len(pods_info)) as executor:
+                    results = list(executor.map(fetch, pods_info))
+                all_healthy = all(results)
+                for idx, healthy in enumerate(results):
+                    if not healthy:
+                        print(f"❌ Pod {pods_info[idx]['name']} ainda não responde via curl")
+            else:
+                all_healthy = False
+
+            if all_healthy and pods_info:
                 recovery_time = time.time() - start_time
-                print(f"🎉 Aplicação {target} respondeu via curl!")
+                print(f"🎉 Todos os pods responderam via curl (HTTP 200 ou 404)!")
                 print(f"⏱️ Tempo de recuperação: {recovery_time:.2f}s")
                 return True, recovery_time
-            else:
-                print(f"❌ Aplicação ainda não responde via curl")
-            
+
             print(f"⏸️ Aguardando {check_interval}s...")
             time.sleep(check_interval)
-        
-        # Timeout atingido
+
         final_time = time.time() - start_time
         print(f"⏰ Timeout de {final_time:.1f}s atingido")
         return False, final_time
-    
-    def _check_pod_application_health(self, pod_name: str) -> bool:
-        """Verifica se aplicação no pod está respondendo via curl."""
-        try:
-            # Extrair nome da aplicação do pod
-            app_name = pod_name.split('-')[0]  # bar-app-xxx -> bar
-            
-            # Mapear para NodePort
-            port_mapping = {'bar': 30082, 'foo': 30081, 'test': 30083}
-            node_port = port_mapping.get(app_name)
-            
-            if not node_port:
-                print(f"❌ NodePort não mapeado para aplicação: {app_name}")
-                return False
-            
-            # Path da aplicação
-            app_path = f"/{app_name}"
-            url = f"http://localhost:{node_port}{app_path}"
-            
-            print(f"   🔗 Testando: {url}")
-            
-            # Executar curl via SSH no control plane
-            curl_result = self.aws_injector._execute_ssh_command(
-                'ip-10-0-0-28', 
-                f'curl -s -o /dev/null -w "%{{http_code}}" --max-time 3 {url}',
-                timeout=5
-            )
-            
-            if curl_result[0] and curl_result[1].strip():
-                status_code = curl_result[1].strip()
-                
-                if status_code == '200':
-                    print(f"   ✅ Aplicação respondeu: HTTP {status_code}")
-                    return True
-                else:
-                    print(f"   ❌ Aplicação com erro: HTTP {status_code}")
-                    return False
-            else:
-                print(f"   ❌ Curl falhou ou sem resposta")
-                return False
-                
-        except Exception as e:
-            print(f"   ⚠️ Erro no curl: {e}")
-            return False
 
     @property
     def component_metrics(self):

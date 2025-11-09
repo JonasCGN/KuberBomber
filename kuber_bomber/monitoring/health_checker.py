@@ -15,7 +15,6 @@ from typing import Dict, Tuple, Optional, List
 from ..utils.config import get_config
 from ..utils.kubectl_executor import KubectlExecutor
 
-
 class HealthChecker:
     """
     ⚕️ Monitor de Saúde das Aplicações
@@ -36,6 +35,17 @@ class HealthChecker:
         """
         self.aws_config = aws_config
         self.is_aws_mode = aws_config is not None
+        if self.is_aws_mode and aws_config:
+            # MODO AWS: Usar APENAS aws_injector
+            print("🔧 Inicializando APENAS AWS injector...")
+            from ..failure_injectors.aws_injector import AWSFailureInjector
+            self.aws_injector = AWSFailureInjector(
+                ssh_key=aws_config['ssh_key'],
+                ssh_host=aws_config['ssh_host'],
+                ssh_user=aws_config['ssh_user']
+            )
+            print("✅ AWS injector configurado - injetores locais não serão usados")
+        
         self.config = get_config(aws_mode=self.is_aws_mode)
         self.kubectl = KubectlExecutor(aws_config=aws_config if self.is_aws_mode else None)
     
@@ -751,7 +761,26 @@ class HealthChecker:
             # Executar curl no control plane via SSH usando aws_injector
             curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{local_url}'"
             
-            curl_result = aws_injector._execute_ssh_command('ip-10-0-0-28', curl_cmd, timeout=15)
+            instances = aws_injector._get_aws_instances()
+            
+            # Encontrar o node_name do ControlPlane dentro do dicionário instances
+            control_plane_node = next(
+                (k for k, v in instances.items() if v.get('Name') == 'ControlPlane' or v.get('Name', '').lower().startswith('control')),
+                None
+            )
+            if not control_plane_node:
+                print("   ❌ ControlPlane não encontrado em instances")
+                return {
+                    'healthy': False,
+                    'response_time': None,
+                    'error': 'ControlPlane instance not found',
+                    'url': local_url,
+                    'url_type': "Control Plane NodePort"
+                }
+
+            node_name = control_plane_node
+            
+            curl_result = aws_injector._execute_ssh_command(control_plane_node, curl_cmd, timeout=15)
             
             if not curl_result[0]:
                 # Se localhost não funcionar, tentar com IP interno do node

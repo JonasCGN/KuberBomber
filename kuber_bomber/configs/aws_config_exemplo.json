@@ -1,5 +1,5 @@
 {
-  "ssh_host": "3.234.220.231",
+  "ssh_host": "IP_ADDRESS_CONTROL_PLANE",
   "ssh_key": "~/.ssh/vockey.pem",
   "ssh_user": "ubuntu"
 }
