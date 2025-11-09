@@ -216,8 +216,8 @@ class AWSFailureInjector:
             if success and "reboot" in cmd:
                 reboot_initiated = True
                 print(f"⏳ Reboot iniciado em {node_name}, aguardando 45s para estabilizar...")
-                import time
-                time.sleep(45)  # Aguardar tempo realista para reboot
+                # import time
+                # time.sleep(45)  # Aguardar tempo realista para reboot
                 print(f"⏳ Node {node_name} deve estar reiniciando agora...")
             
         if reboot_initiated or any("✅" in r for r in results):
@@ -317,8 +317,8 @@ class AWSFailureInjector:
             if success and "reboot" in cmd:
                 reboot_initiated = True
                 print(f"⏳ Control plane reboot iniciado em {node_name}, aguardando 60s para estabilizar...")
-                import time
-                time.sleep(60)  # Control plane demora mais para reiniciar
+                # import time
+                # time.sleep(60)  # Control plane demora mais para reiniciar
                 print(f"⏳ Control plane {node_name} deve estar reiniciando agora...")
             
         if reboot_initiated or any("✅" in r for r in results):
