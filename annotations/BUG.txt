@@ -1,1 +1,1 @@
-- Quando pauso e starto novamente, tem probkemas de conexao dentro do pod
+-> run_all_failures_aws(PEGAR MTTR) -> rodar os scripts de teste de disponibilidade(3 vezes)
