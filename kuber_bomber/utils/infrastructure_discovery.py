@@ -53,13 +53,19 @@ class InfrastructureDiscovery:
         
         # MTTR padrão para componentes que precisam intervenção (em horas)
         self.default_mttr = {
-            'worker_node': 400.0,
-            'wn_runtime': 50.0,
-            'wn_kubelet': 30.0,
-            'cp_apiserver': 60.0,
-            'cp_manager': 45.0,
-            'cp_scheduler': 40.0,
-            'cp_etcd': 120.0
+            'pod': 188.81 / 3600,           # ≈ 0.0524 h
+            'container': 188.81 / 3600,     # ≈ 0.0524 h
+
+            'worker_node': 58.09 / 3600,    # ≈ 0.0161 h
+            'wn_runtime': 40.54 / 3600,     # ≈ 0.0113 h
+            'wn_proxy': 9.27 / 3600,        # ≈ 0.0026 h
+            'wn_kubelet': 9.46 / 3600,      # ≈ 0.0026 h
+
+            'control_plane': 155.03 / 3600, # ≈ 0.0431 h
+            'cp_apiserver': 200.90 / 3600,  # ≈ 0.0558 h
+            'cp_manager': 9.40 / 3600,      # ≈ 0.0026 h
+            'cp_scheduler': 9.54 / 3600,    # ≈ 0.0027 h
+            'cp_etcd': 199.07 / 3600        # ≈ 0.0553 h
         }
     
     def _run_kubectl_command(self, command: str) -> str:
@@ -345,6 +351,10 @@ class InfrastructureDiscovery:
             for pod_name in pods:
                 config["mttf_config"]["pods"][pod_name] = self.default_mttf["pod"]
                 config["mttf_config"]["pods"][f"container-{pod_name}"] = self.default_mttf["container"]
+                
+                config["mttr_config"]["pods"][pod_name] = self.default_mttr.get("pod", 0.0524)
+                config["mttr_config"]["pods"][f"container-{pod_name}"] = self.default_mttr.get("container", 0.0524)
+                
 
         # Preencher mttf_config.worker_node (nodes + componentes juntos)
         for node_name in worker_nodes:
@@ -352,6 +362,11 @@ class InfrastructureDiscovery:
             config["mttf_config"]["worker_node"][f"wn_runtime-{node_name}"] = self.default_mttf["wn_runtime"]
             config["mttf_config"]["worker_node"][f"wn_proxy-{node_name}"] = self.default_mttf["wn_proxy"]
             config["mttf_config"]["worker_node"][f"wn_kubelet-{node_name}"] = self.default_mttf["wn_kubelet"]
+            
+            config["mttr_config"]["worker_node"][node_name] = self.default_mttr.get("worker_node", 0.0161)
+            config["mttr_config"]["worker_node"][f"wn_runtime-{node_name}"] = self.default_mttr.get("wn_runtime", 0.0113)
+            config["mttr_config"]["worker_node"][f"wn_proxy-{node_name}"] = self.default_mttr.get("wn_proxy", 0.0026)
+            config["mttr_config"]["worker_node"][f"wn_kubelet-{node_name}"] = self.default_mttr.get("wn_kubelet", 0.0026)
 
         # Preencher mttf_config.control_plane (cp + componentes juntos)
         for cp_name in control_plane_nodes:
@@ -360,20 +375,12 @@ class InfrastructureDiscovery:
             config["mttf_config"]["control_plane"][f"cp_manager-{cp_name}"] = self.default_mttf["cp_manager"]
             config["mttf_config"]["control_plane"][f"cp_scheduler-{cp_name}"] = self.default_mttf["cp_scheduler"]
             config["mttf_config"]["control_plane"][f"cp_etcd-{cp_name}"] = self.default_mttf["cp_etcd"]
-
-        # Preencher mttr_config (valores padrão por categoria)
-        config["mttr_config"]["pods"] = {}  # pods têm self-healing, mttr = 0 geralmente
-        config["mttr_config"]["worker_node"] = {
-            "worker_node": self.default_mttr.get("worker_node", 400.0),
-            "wn_runtime": self.default_mttr.get("wn_runtime", 50.0),
-            "wn_kubelet": self.default_mttr.get("wn_kubelet", 30.0)
-        }
-        config["mttr_config"]["control_plane"] = {
-            "cp_apiserver": self.default_mttr.get("cp_apiserver", 60.0),
-            "cp_manager": self.default_mttr.get("cp_manager", 45.0),
-            "cp_scheduler": self.default_mttr.get("cp_scheduler", 40.0),
-            "cp_etcd": self.default_mttr.get("cp_etcd", 120.0)
-        }
+            
+            config["mttr_config"]["control_plane"][cp_name] = self.default_mttr.get("control_plane", 0.0431)
+            config["mttr_config"]["control_plane"][f"cp_apiserver-{cp_name}"] = self.default_mttr.get("cp_apiserver", 0.0558)
+            config["mttr_config"]["control_plane"][f"cp_manager-{cp_name}"] = self.default_mttr.get("cp_manager", 0.0026)
+            config["mttr_config"]["control_plane"][f"cp_scheduler-{cp_name}"] = self.default_mttr.get("cp_scheduler", 0.0027)
+            config["mttr_config"]["control_plane"][f"cp_etcd-{cp_name}"] = self.default_mttr.get("cp_etcd", 0.0553)
 
         print("✅ Estrutura de configuração gerada (aninhada)!")
         print(f"   • {len(pods_by_app)} aplicações")
