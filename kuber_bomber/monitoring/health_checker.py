@@ -14,6 +14,7 @@ import json
 from typing import Dict, Tuple, Optional, List
 from ..utils.config import get_config
 from ..utils.kubectl_executor import KubectlExecutor
+import threading
 
 class HealthChecker:
     """
@@ -35,6 +36,7 @@ class HealthChecker:
         """
         self.aws_config = aws_config
         self.is_aws_mode = aws_config is not None
+
         if self.is_aws_mode and aws_config:
             # MODO AWS: Usar APENAS aws_injector
             print("🔧 Inicializando APENAS AWS injector...")
@@ -48,7 +50,7 @@ class HealthChecker:
         
         self.config = get_config(aws_mode=self.is_aws_mode)
         self.kubectl = KubectlExecutor(aws_config=aws_config if self.is_aws_mode else None)
-    
+        
     def check_application_health(self, service: str, verbose: bool = True, use_ingress: bool = False) -> Dict:
         """
         Verifica a saúde de uma aplicação usando descoberta dinâmica de URLs.
@@ -1080,3 +1082,110 @@ class HealthChecker:
                 'url': url,
                 'url_type': "AWS NodePort (fallback)"
             }
+            
+    def wait_for_pods_recovery(self) -> Tuple[bool, float]:
+        """Aguarda recuperação via CURL nos IPs dos pods usando threads, sem bloquear pelo get_pods_info."""
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        start_time = time.time()
+        timeout = self.config.current_recovery_timeout
+        check_interval = 2.0
+
+        print(f"⏳ Aguardando recuperação via CURL do sistema...")
+        print(f"📊 Timeout: {timeout}s | Verificação a cada {check_interval}s")
+
+        pods_info = []
+        pods_lock = threading.Lock()
+        stop_thread = threading.Event()
+
+        def update_pods_info():
+            while not stop_thread.is_set():
+                info = self.kubectl.get_pods_info()
+                with pods_lock:
+                    pods_info.clear()
+                    pods_info.extend(info)
+                time.sleep(check_interval)
+
+        updater_thread = threading.Thread(target=update_pods_info, daemon=True)
+        updater_thread.start()
+
+        def fetch(pod_info):
+            pod_ip = pod_info.get('ip')
+            pod_port = pod_info.get('port')
+            pod_node = pod_info.get('node')
+            pod_name = pod_info.get('name')
+
+            if not pod_ip or not pod_port or not pod_node:
+                print(f"❌ IP, porta ou node não encontrados para pod: {pod_name}")
+                return False
+
+            url = f"http://{pod_ip}:{pod_port}/"
+            # print(f"   🔗 Testando: {url} via SSH no node {pod_node}")
+
+            curl_cmd = f'curl -s -o /dev/null -w "%{{http_code}}" --max-time 3 {url}'
+            try:
+                curl_result = self.aws_injector._execute_ssh_command(
+                    pod_node,
+                    curl_cmd,
+                    timeout=5
+                )
+
+                if curl_result[0] and curl_result[1].strip():
+                    status_code = curl_result[1].strip()
+                    if status_code in ['200', '404']:
+                        print(f"   ✅ Aplicação respondeu: HTTP {status_code} (considerado ativo)")
+                        return True
+                    else:
+                        print(f"   ❌ Aplicação com erro: HTTP {status_code}")
+                        return False
+                else:
+                    print(f"   ❌ Curl falhou ou sem resposta")
+                    return False
+            except Exception as e:
+                print(f"   ⚠️ Erro no curl: {e}")
+                return False
+            
+        try:
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                with pods_lock:
+                    current_pods = list(pods_info)
+                all_healthy = True
+
+                elapsed = time.time() - start_time
+                check_num = int(elapsed / check_interval) + 1
+
+                print(f"\n🔍 Verificação #{check_num} (tempo: {elapsed:.1f}s/{timeout}s)")
+
+                if current_pods:
+                    with ThreadPoolExecutor(max_workers=len(current_pods)) as executor:
+                        results = list(executor.map(fetch, current_pods))
+                    all_healthy = all(results)
+                    for idx, healthy in enumerate(results):
+                        if not healthy:
+                            print(f"❌ Pod {current_pods[idx]['name']} ainda não responde via curl")
+                else:
+                    all_healthy = False
+
+                if all_healthy and current_pods:
+                    recovery_time = time.time() - start_time
+                    print(f"🎉 Todos os pods responderam via curl (HTTP 200 ou 404)!")
+                    print(f"⏱️ Tempo de recuperação: {recovery_time:.2f}s")
+                    stop_thread.set()
+                    updater_thread.join(timeout=1)
+                    return True, recovery_time
+
+                print(f"⏸️ Aguardando {check_interval}s...")
+                time.sleep(check_interval)
+
+            final_time = time.time() - start_time
+            print(f"⏰ Timeout de {final_time:.1f}s atingido")
+            
+            stop_thread.set()
+            updater_thread.join(timeout=1)
+            return False, final_time
+        except Exception as e:
+            stop_thread.set()
+            updater_thread.join(timeout=1)
+            raise e

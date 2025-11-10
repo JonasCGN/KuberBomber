@@ -63,14 +63,14 @@ run_all_failures_aws:
 # 	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target ip-10-0-0-241 --iterations 10 --interval 5 --aws
 # 	@echo ""
 # 	@echo "🎛️  ===== TESTES DE CONTROL PLANE AWS ====="
-# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
-# 	@echo ""
+	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
+	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 # 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_controller_manager --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 # 	@echo ""
-	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_scheduler --target ip-10-0-0-28 --iterations 1 --interval 5 --aws
-	@echo ""
+# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_scheduler --target ip-10-0-0-28 --iterations 1 --interval 5 --aws
+# 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_etcd --target ip-10-0-0-28 --iterations 10 --interval 5 --aws --timeout extended
 # 	@echo ""
 # 	@echo "✅ Suite completa de testes AWS finalizada!"
@@ -104,7 +104,7 @@ generate_config_all_aws:
 	cd ./ && python3 -m kuber_bomber.cli.availability_cli --get-config-all --force-aws
 
 ssh_cli_cp:
-	ssh -i ~/.ssh/vockey.pem ubuntu@3.237.204.249
+	ssh -i ~/.ssh/vockey.pem ubuntu@44.223.81.203
 
 ssh_cli_wn:
 	ssh -i ~/.ssh/vockey.pem ubuntu@13.220.170.35

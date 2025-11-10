@@ -99,7 +99,7 @@ class KubectlExecutor:
                 'stderr': e.stderr if e.stderr else str(e)
             }
     
-    def get_pods(self) -> List[str]:
+    def get_pods(self,show_debug=False) -> List[str]:
         """
         Obtém lista de pods usando aplicações configuradas.
         
@@ -122,7 +122,8 @@ class KubectlExecutor:
 
             # Pegar nomes dos deployments (apps)
             app_names = [item['metadata']['name'] for item in kubectl_data.get('items', [])]
-            print(f"📦 Aplicações encontradas: {app_names}")
+            if show_debug:
+                print(f"📦 Aplicações encontradas: {app_names}")
 
             # Agora buscar pods e filtrar pelos apps
             pods_result = self.execute_kubectl(['get', 'pods', '-o', 'json'])
@@ -136,8 +137,9 @@ class KubectlExecutor:
                 for item in pods_data.get('items', [])
                 if any(app in item['metadata']['name'] for app in app_names)
             ]
-
-            print(f"✅ Pods encontrados: {all_pods}")
+            
+            if show_debug:
+                print(f"✅ Pods encontrados: {all_pods}")
             return all_pods
         else:
             # Modo local
@@ -167,7 +169,7 @@ class KubectlExecutor:
         nodes = result['output'].strip().split()
         return [node for node in nodes if node]
     
-    def get_pods_info(self) -> List[dict]:
+    def get_pods_info(self,show_debug=False) -> List[dict]:
         """
         Obtém informações detalhadas dos pods: nome, IP, node, porta.
         Returns:

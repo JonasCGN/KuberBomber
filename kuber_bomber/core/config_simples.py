@@ -59,6 +59,7 @@ class ConfigSimples:
     timestamp: Optional[str] = None
     duration: int = 1000
     iterations: int = 5
+    delay: int = 10  # delay em segundos entre injeções de falha
     
     # ===== CONFIGURAÇÃO AWS (carregada OBRIGATORIAMENTE de aws_config.json) =====
     aws_enabled: bool = False
@@ -96,7 +97,7 @@ class ConfigSimples:
             return cls()
     
     @classmethod
-    def load_aws_config(cls, aws_config_file: str = "config/aws_config.json") -> Dict[str, Any]:
+    def load_aws_config(cls, aws_config_file: str = f"{os.getcwd}/kuber_bomber/configs/aws_config.json") -> Dict[str, Any]:
         """
         Carrega configuração AWS de arquivo separado.
         
@@ -115,7 +116,7 @@ class ConfigSimples:
         
         return {}
     
-    def configure_aws(self, aws_config_file: str = "config/aws_config.json"):
+    def configure_aws(self, aws_config_file: str = f"{os.getcwd()}/kuber_bomber/configs/aws_config.json"):
         """
         Configura parâmetros AWS a partir de arquivo.
         
@@ -133,12 +134,14 @@ class ConfigSimples:
             print(f"✅ AWS configurado: {self.aws_ssh_user}@{self.aws_public_ip}")
         else:
             print("⚠️ Configuração AWS não encontrada")
+            print(aws_config_file)
     
     def _load_from_dict(self, data: Dict[str, Any]):
         """Carrega dados do dicionário JSON."""
         self.timestamp = data.get('timestamp')
         self.duration = data.get('duration', 1000)
         self.iterations = data.get('iterations', 5)
+        self.delay = data.get('delay', 10)  # carregar delay do JSON
         # Armazenar todo o payload para uso posterior
         self.config_data = data
         # Garantir chaves aninhadas mínimas para compatibilidade
@@ -520,6 +523,7 @@ class ConfigSimples:
         
         print(f"⏱️ Duração: {self.duration}h")
         print(f"🔄 Iterações: {self.iterations}")
+        print(f"⏲️ Delay entre falhas: {self.delay}s")
         
         # Configuração AWS
         if self.aws_enabled:

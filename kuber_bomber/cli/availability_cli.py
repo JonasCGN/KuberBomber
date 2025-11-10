@@ -118,8 +118,9 @@ def load_or_generate_config(args) -> ConfigSimples:
     Returns:
         Configuração carregada
     """
-    config_file = "config_simples_used.json"
+    config_file = os.getcwd() + "/kuber_bomber/configs/config_simples_used.json"
     
+    print(f"📁 Arquivo de configuração padrão: {config_file}")
     # Se forçar geração de nova configuração
     if args.get_config or args.get_config_all:
         print("🏗️ Gerando nova configuração...")
@@ -160,7 +161,6 @@ def load_or_generate_config(args) -> ConfigSimples:
         print(f"💾 Configuração padrão salva em: {saved_file}")
         
         return config
-
 
 def main():
     """Função principal do CLI."""
@@ -309,7 +309,16 @@ python3 -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5
     
     # Criar simulador
     try:
-        simulator = AvailabilitySimulator()
+        # Verificar se deve usar AWS
+        aws_config_for_simulator = None
+        if args.force_aws:
+            try:
+                aws_config_for_simulator = config.get_aws_config()
+                print(f"🔧 Criando simulador AWS com config: {aws_config_for_simulator.get('ssh_host', 'N/A')}")
+            except Exception as e:
+                print(f"⚠️ Erro ao obter AWS config: {e}")
+        
+        simulator = AvailabilitySimulator(aws_config=aws_config_for_simulator)
         
         # Aplicar configuração
         if hasattr(simulator, '_apply_config_simples_v2'):
@@ -336,14 +345,24 @@ python3 -m kuber_bomber.cli.availability_cli --duration 1000 --iterations 5
             return
         
         # Configurar delay entre falhas
-        if hasattr(args, 'delay') and args.delay != 60:
+        if not args.use_config_simples and hasattr(args, 'delay') and args.delay != 60:
+            # Só aplicar delay do CLI se NÃO estiver usando config simples
             simulator.real_delay_between_failures = args.delay
+        elif args.use_config_simples:
+            # Se usar config simples, o delay já foi aplicado no _apply_config_simples_v2
+            print(f"📄 Usando delay do config: {simulator.real_delay_between_failures}s")
         
         # Executar simulação
         print("📊 Configuração da simulação:")
         print(f"  • Duração: {config.duration} horas fictícias")
         print(f"  • Iterações: {config.iterations}")
-        print(f"  • Delay entre falhas: {getattr(args, 'delay', 60)} segundos reais")
+        
+        # Mostrar delay correto baseado na fonte
+        if args.use_config_simples:
+            print(f"  • Delay entre falhas: {simulator.real_delay_between_failures}s (do config)")
+        else:
+            print(f"  • Delay entre falhas: {getattr(args, 'delay', 60)}s (CLI)")
+        
         print(f"  • Componentes: {len(simulator.components)}")
         print(f"  • Aplicações: {len(config.get_applications())}")
         

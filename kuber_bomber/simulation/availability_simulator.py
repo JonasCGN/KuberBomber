@@ -27,7 +27,7 @@ from ..failure_injectors.aws_injector import AWSFailureInjector
 from ..monitoring.health_checker import HealthChecker
 from ..reports.csv_reporter import CSVReporter
 from ..utils.kubectl_executor import get_kubectl_executor
-
+from ..utils.aws_config_loader import load_aws_config
 
 @dataclass
 class Component:
@@ -53,53 +53,44 @@ class Component:
                 ]
             elif self.mttf_key == "container":
                 self.available_failure_methods = [
-                    "kill_container_process",
-                    "restart_container"
+                    "kill_all_processes",
+                    "kill_init_process"
                 ]
             elif self.mttf_key == "worker_node" or (self.component_type == "node" and not self.mttf_key):
                 self.available_failure_methods = [
                     "kill_worker_node_processes",
-                    "shutdown_worker_node"
                 ]
             elif self.mttf_key == "wn_runtime":
                 self.available_failure_methods = [
                     "restart_containerd",
-                    "kill_containerd"
                 ]
             elif self.mttf_key == "wn_proxy":
                 self.available_failure_methods = [
-                    "delete_kube_proxy",
                     "kill_kube_proxy"
                 ]
             elif self.mttf_key == "wn_kubelet":
                 self.available_failure_methods = [
                     "kill_kubelet",
-                    "restart_kubelet"
                 ]
             elif self.mttf_key == "control_plane" or (self.component_type == "control_plane" and not self.mttf_key):
                 self.available_failure_methods = [
                     "kill_control_plane_processes",
-                    "restart_control_plane"
                 ]
             elif self.mttf_key == "cp_apiserver":
                 self.available_failure_methods = [
                     "kill_kube_apiserver",
-                    "restart_kube_apiserver"
                 ]
             elif self.mttf_key == "cp_manager":
                 self.available_failure_methods = [
                     "kill_kube_controller_manager",
-                    "restart_kube_controller_manager"
                 ]
             elif self.mttf_key == "cp_scheduler":
                 self.available_failure_methods = [
                     "kill_kube_scheduler",
-                    "restart_kube_scheduler"
                 ]
             elif self.mttf_key == "cp_etcd":
                 self.available_failure_methods = [
                     "kill_etcd",
-                    "restart_etcd"
                 ]
     
     def get_random_failure_method(self) -> str:
@@ -177,15 +168,33 @@ class AvailabilitySimulator:
         
         # Injetores de falha - usar AWS quando estiver em modo AWS
         if self.is_aws_mode and aws_config:
+            
             print("🔧 Inicializando injetores AWS...")
+            # Usar aws_config passado como parâmetro, não recarregar
+            # aws_config já foi carregado pelo CLI
+            
             ssh_host = aws_config.get('ssh_host', '')
-            if not ssh_host:
-                raise ValueError("ssh_host é obrigatório para modo AWS")
             
             self.aws_injector = AWSFailureInjector(
-                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem'),
                 ssh_host=ssh_host,
-                ssh_user=aws_config.get('ssh_user', 'ubuntu')
+                ssh_user=aws_config.get('ssh_user', 'ubuntu'),
+                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem')
+            )
+            print(f"✅ AWS injector configurado para {ssh_host}")
+        elif self.is_aws_mode:
+            # Se is_aws_mode=True mas aws_config=None, tentar carregar
+            print("🔧 Inicializando injetores AWS...")
+            aws_config = load_aws_config()
+            if not aws_config:
+                print("❌ Falha ao carregar configuração AWS. Abortando inicialização do simulador.")
+                sys.exit(1)
+            
+            ssh_host = aws_config.get('ssh_host', '')
+            
+            self.aws_injector = AWSFailureInjector(
+                ssh_host=ssh_host,
+                ssh_user=aws_config.get('ssh_user', 'ubuntu'),
+                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem')
             )
             print(f"✅ AWS injector configurado para {ssh_host}")
         else:
@@ -1214,7 +1223,11 @@ class AvailabilitySimulator:
         """Injeta falha no worker node completo."""
         print(f"  🖥️ Executando falha de WORKER NODE: {failure_method}")
         
-        node_name = component.name
+        # Extrair nome do node (worker_node-ip-10-0-0-98 -> ip-10-0-0-98)
+        if component.name.startswith('worker_node-'):
+            node_name = component.name[len('worker_node-'):]
+        else:
+            node_name = component.name
         
         if failure_method == "kill_worker_node_processes":
             if self.is_aws_mode and self.aws_injector:
@@ -1258,13 +1271,6 @@ class AvailabilitySimulator:
             else:
                 # Para local, simular com restart de processos do worker
                 success, _ = self.node_injector.kill_worker_node_processes(node_name)
-        elif failure_method == "kill_containerd":
-            print(f"  💀 Matando processo containerd em {node_name}")
-            if self.is_aws_mode and self.aws_injector:
-                success, _ = self.aws_injector.restart_containerd(node_name)  # AWS usa restart
-            else:
-                # Para local, simular com restart de processos do worker
-                success, _ = self.node_injector.kill_worker_node_processes(node_name)
         else:
             # Fallback
             if self.is_aws_mode and self.aws_injector:
@@ -1284,21 +1290,20 @@ class AvailabilitySimulator:
         """Injeta falha específica no kube-proxy."""
         print(f"  🌐 Executando falha de KUBE-PROXY: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-proxy", "")
+        # Extrair nome do node do componente (wn_proxy-ip-10-0-0-98 -> ip-10-0-0-98)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (wn_proxy-)
+        else:
+            node_name = component.parent_component or component.name
         
-        if failure_method == "delete_kube_proxy":
-            if self.is_aws_mode and self.aws_injector:
-                success, _ = self.aws_injector.delete_kube_proxy_pod(node_name)
-            else:
-                success, _ = self.control_plane_injector.delete_kube_proxy_pod(node_name)
-        elif failure_method == "kill_kube_proxy":
+        if failure_method == "kill_kube_proxy":
             print(f"  💀 Matando processo kube-proxy em {node_name}")
             # Simular kill do processo kube-proxy
             success = True  # Simular por enquanto
         else:
             # Fallback
             if self.is_aws_mode and self.aws_injector:
-                success, _ = self.aws_injector.delete_kube_proxy_pod(node_name)
+                success, _ = self.aws_injector.kill_kube_proxy_pod(node_name)
             else:
                 success, _ = self.control_plane_injector.delete_kube_proxy_pod(node_name)
         
@@ -1313,7 +1318,11 @@ class AvailabilitySimulator:
         """Injeta falha específica no kubelet."""
         print(f"  ⚙️ Executando falha de KUBELET: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-kubelet", "")
+        # Extrair nome do node do componente (wn_kubelet-ip-10-0-0-98 -> ip-10-0-0-98)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (wn_kubelet-)
+        else:
+            node_name = component.parent_component or component.name
         
         if failure_method == "kill_kubelet":
             if self.is_aws_mode and self.aws_injector:
@@ -1344,15 +1353,13 @@ class AvailabilitySimulator:
         """Injeta falha no control plane completo."""
         print(f"  🎛️ Executando falha de CONTROL PLANE: {failure_method}")
         
-        node_name = component.name
+        # Extrair nome do node (control_plane-ip-10-0-0-28 -> ip-10-0-0-28)
+        if component.name.startswith('control_plane-'):
+            node_name = component.name[len('control_plane-'):]
+        else:
+            node_name = component.name
         
         if failure_method == "kill_control_plane_processes":
-            if self.is_aws_mode and self.aws_injector:
-                success, _ = self.aws_injector.kill_control_plane_processes(node_name)
-            else:
-                success = self.node_injector.kill_control_plane_processes(node_name)
-        elif failure_method == "restart_control_plane":
-            print(f"  🔄 Reiniciando control plane {node_name}")
             if self.is_aws_mode and self.aws_injector:
                 success, _ = self.aws_injector.kill_control_plane_processes(node_name)
             else:
@@ -1375,7 +1382,11 @@ class AvailabilitySimulator:
         """Injeta falha específica no kube-apiserver."""
         print(f"  � Executando falha de API SERVER: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-apiserver", "")
+        # Extrair nome do node do componente (cp_apiserver-ip-10-0-0-28 -> ip-10-0-0-28)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (cp_apiserver-)
+        else:
+            node_name = component.parent_component or component.name
         
         if failure_method == "kill_kube_apiserver":
             if self.is_aws_mode and self.aws_injector:
@@ -1406,7 +1417,11 @@ class AvailabilitySimulator:
         """Injeta falha específica no controller manager."""
         print(f"  🎮 Executando falha de CONTROLLER MANAGER: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-manager", "")
+        # Extrair nome do node do componente (cp_manager-ip-10-0-0-28 -> ip-10-0-0-28)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (cp_manager-)
+        else:
+            node_name = component.parent_component or component.name
         
         if failure_method == "kill_kube_controller_manager":
             if self.is_aws_mode and self.aws_injector:
@@ -1437,7 +1452,11 @@ class AvailabilitySimulator:
         """Injeta falha específica no scheduler."""
         print(f"  📅 Executando falha de SCHEDULER: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-scheduler", "")
+        # Extrair nome do node do componente (cp_scheduler-ip-10-0-0-28 -> ip-10-0-0-28)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (cp_scheduler-)
+        else:
+            node_name = component.parent_component or component.name
         
         if failure_method == "kill_kube_scheduler":
             if self.is_aws_mode and self.aws_injector:
@@ -1468,7 +1487,11 @@ class AvailabilitySimulator:
         """Injeta falha específica no etcd."""
         print(f"  🗄️ Executando falha de ETCD: {failure_method}")
         
-        node_name = component.parent_component or component.name.replace("-etcd", "")
+        # Extrair nome do node do componente (cp_etcd-ip-10-0-0-28 -> ip-10-0-0-28)
+        if '-' in component.name:
+            node_name = component.name.split('-', 1)[1]  # Remove prefixo (cp_etcd-)
+        else:
+            node_name = component.parent_component or component.name
         
         if failure_method == "kill_etcd":
             if self.is_aws_mode and self.aws_injector:
@@ -1508,7 +1531,18 @@ class AvailabilitySimulator:
         # Verificar cada aplicação
         for app_name, min_required in self.availability_criteria.items():
             try:
-                pods = self.health_checker.get_pods_by_app_label(app_name.replace("-app", ""))
+                # Extrair o nome base da aplicação do nome completo do pod
+                # bar-app-775c8885f5-6wdlt -> bar
+                # foo-app-864f66dd4d-lt8rf -> foo
+                # test-app-fcd6f4bf5-5r42n -> test
+                if app_name.endswith('-app') or '-app-' in app_name:
+                    # Se termina com -app ou contém -app-, extrair a parte antes de -app
+                    app_base = app_name.split('-app')[0]
+                else:
+                    # Fallback: usar primeira parte antes do primeiro hífen
+                    app_base = app_name.split('-')[0]
+                
+                pods = self.health_checker.get_pods_by_app_label(app_base)
                 ready_pods = sum(1 for pod in pods if pod.get('ready', False))
                 
                 app_available = ready_pods >= min_required
@@ -1532,83 +1566,83 @@ class AvailabilitySimulator:
         
         return system_available, availability_details
     
-    def wait_for_recovery(self, component: Component) -> float:
-        """
-        Aguarda recuperação real do componente verificando requisições HTTP.
+    # def wait_for_recovery(self, component: Component) -> float:
+    #     """
+    #     Aguarda recuperação real do componente verificando requisições HTTP.
         
-        Args:
-            component: Componente a aguardar recuperação
+    #     Args:
+    #         component: Componente a aguardar recuperação
             
-        Returns:
-            Tempo real de recuperação em segundos
-        """
-        print(f"⏳ Aguardando recuperação de {component.name}...")
+    #     Returns:
+    #         Tempo real de recuperação em segundos
+    #     """
+    #     print(f"⏳ Aguardando recuperação de {component.name}...")
         
-        start_time = time.time()
-        check_interval = 2  # verificar a cada 2 segundos
+    #     start_time = time.time()
+    #     check_interval = 2  # verificar a cada 2 segundos
         
-        while True:  # Aguarda indefinidamente até recuperar
-            try:
-                if component.component_type == "pod":
-                    # CORREÇÃO: Usar descoberta dinâmica diretamente
-                    app_name = component.name  # Manter nome completo (ex: bar-app)
+    #     while True:  # Aguarda indefinidamente até recuperar
+    #         try:
+    #             if component.component_type == "pod":
+    #                 # CORREÇÃO: Usar descoberta dinâmica diretamente
+    #                 app_name = component.name  # Manter nome completo (ex: bar-app)
                     
-                    # Usar health_checker com descoberta dinâmica
-                    health_result = self.health_checker.check_application_health(app_name, verbose=False)
+    #                 # Usar health_checker com descoberta dinâmica
+    #                 health_result = self.health_checker.check_application_health(app_name, verbose=False)
                     
-                    if health_result.get('healthy', False):
-                        recovery_time = time.time() - start_time
-                        url_info = health_result.get('url_type', 'health check')
-                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s ({url_info})")
-                        component.current_status = 'healthy'
+    #                 if health_result.get('healthy', False):
+    #                     recovery_time = time.time() - start_time
+    #                     url_info = health_result.get('url_type', 'health check')
+    #                     print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s ({url_info})")
+    #                     component.current_status = 'healthy'
                         
-                        return recovery_time
+    #                     return recovery_time
                     
-                    # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
+    #                 # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
                         
-                elif component.component_type in ["node", "control_plane"]:
-                    # Para nodes, PRIMEIRO verificar se todas as aplicações estão funcionando (curl/HTTP)
-                    # Verificar se todas as aplicações definidas nos critérios estão funcionando
-                    all_apps_healthy = True
-                    apps_status = []
+    #             elif component.component_type in ["node", "control_plane"]:
+    #                 # Para nodes, PRIMEIRO verificar se todas as aplicações estão funcionando (curl/HTTP)
+    #                 # Verificar se todas as aplicações definidas nos critérios estão funcionando
+    #                 all_apps_healthy = True
+    #                 apps_status = []
                     
-                    for app_name in self.availability_criteria.keys():
-                        health_result = self.health_checker.check_application_health(app_name, verbose=False)
-                        is_healthy = health_result.get('healthy', False)
-                        url_info = health_result.get('url_type', 'unknown')
-                        apps_status.append(f"{app_name}: {'✅' if is_healthy else '❌'} ({url_info})")
+    #                 for app_name in self.availability_criteria.keys():
+    #                     health_result = self.health_checker.check_application_health(app_name, verbose=False)
+    #                     is_healthy = health_result.get('healthy', False)
+    #                     url_info = health_result.get('url_type', 'unknown')
+    #                     apps_status.append(f"{app_name}: {'✅' if is_healthy else '❌'} ({url_info})")
                         
-                        if not is_healthy:
-                            all_apps_healthy = False
+    #                     if not is_healthy:
+    #                         all_apps_healthy = False
                     
-                    if all_apps_healthy:
-                        # Todas as apps estão funcionando via HTTP - recuperação confirmada!
-                        recovery_time = time.time() - start_time
-                        print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (todas apps funcionando via HTTP)")
-                        component.current_status = 'healthy'
+    #                 if all_apps_healthy:
+    #                     # Todas as apps estão funcionando via HTTP - recuperação confirmada!
+    #                     recovery_time = time.time() - start_time
+    #                     print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (todas apps funcionando via HTTP)")
+    #                     component.current_status = 'healthy'
                         
-                        return recovery_time
-                    else:
-                        # Apps ainda não funcionando, verificar node status como informação adicional
-                        node_ready = self.health_checker.is_node_ready(component.name)
-                        node_status = "Ready" if node_ready else "NotReady"
+    #                     return recovery_time
+    #                 else:
+    #                     # Apps ainda não funcionando, verificar node status como informação adicional
+    #                     node_ready = self.health_checker.is_node_ready(component.name)
+    #                     node_status = "Ready" if node_ready else "NotReady"
                         
-                        print(f"  ⏳ Apps ainda recuperando (node: {node_status}): {', '.join(apps_status)}")
+    #                     print(f"  ⏳ Apps ainda recuperando (node: {node_status}): {', '.join(apps_status)}")
                         
-                        # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 10min, aceitar
-                        if node_ready and (time.time() - start_time) > 600:  # 10 minutos
-                            print(f"  ⚠️ FALLBACK: Node Ready há >10min mas apps não respondem HTTP")
-                            recovery_time = time.time() - start_time
-                            print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (fallback: node Ready)")
-                            component.current_status = 'healthy'
+    #                     # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 10min, aceitar
+    #                     if node_ready and (time.time() - start_time) > 600:  # 10 minutos
+    #                         print(f"  ⚠️ FALLBACK: Node Ready há >10min mas apps não respondem HTTP")
+    #                         recovery_time = time.time() - start_time
+    #                         print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (fallback: node Ready)")
+    #                         component.current_status = 'healthy'
                             
-                            return recovery_time
+    #                         return recovery_time
                 
-                time.sleep(check_interval)
+    #             time.sleep(check_interval)
                 
-            except Exception as e:
-                print(f"  ⚠️ Erro verificando recuperação: {e}")
-                time.sleep(check_interval)
+    #         except Exception as e:
+    #             print(f"  ⚠️ Erro verificando recuperação: {e}")
+    #             time.sleep(check_interval)
     
     def check_system_availability(self) -> bool:
         """
@@ -1765,9 +1799,9 @@ class AvailabilitySimulator:
             # Injetar falha
             failure_method = next_event.component.get_random_failure_method()
             if self.inject_failure(next_event.component, failure_method):
-                # Aguardar recuperação (tempo real) primeiro
-                recovery_start_time = time.time()
-                recovery_time = self.wait_for_recovery(next_event.component)
+                time.sleep(2)  # Pequeno delay antes de checar recuperação
+                
+                _,recovery_time = self.health_checker.wait_for_pods_recovery()
                 next_event.component.total_downtime += recovery_time
                 
                 # Aguardar 1 minuto real (delay fixo) - DEPOIS da recuperação
@@ -2582,6 +2616,11 @@ class AvailabilitySimulator:
         # Aplicar critérios de disponibilidade
         self.availability_criteria = config_simples.get_availability_criteria()
         print(f"🎯 Critérios de disponibilidade: {self.availability_criteria}")
+        
+        # Aplicar delay do config
+        if hasattr(config_simples, 'delay') and config_simples.delay:
+            self.real_delay_between_failures = config_simples.delay
+            print(f"⏱️ Delay entre falhas configurado: {self.real_delay_between_failures}s")
         
         # Configurar AWS se necessário
         aws_config = config_simples.get_aws_config()

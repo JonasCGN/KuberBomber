@@ -1,6 +1,7 @@
 {
   "iterations": 5,
-  "duration": 1000.0,
+  "duration": 1000,
+  "delay": 15,
   "experiment_config": {
     "applications": {
       "bar-app": true,

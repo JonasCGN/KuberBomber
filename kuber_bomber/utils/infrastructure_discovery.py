@@ -330,6 +330,10 @@ class InfrastructureDiscovery:
             "availability_criteria": {}
         }
 
+        config["iterations"] = iterations
+        config["delay"] = 10
+        config["duration"] = 1000  # horas fictícias padrão
+        
         # Preencher experiment_config.applications e availability_criteria
         for app_name, pods in pods_by_app.items():
             for pod_name in pods:

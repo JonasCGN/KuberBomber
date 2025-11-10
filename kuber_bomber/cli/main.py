@@ -30,7 +30,7 @@ from kuber_bomber.utils.config import (
     get_config, set_global_recovery_timeout, list_timeout_options, 
     get_current_recovery_timeout, DEFAULT_CONFIG
 )
-
+from utils.kubectl_executor import KubectlExecutor
 
 def create_parser():
     """Cria o parser de argumentos mantendo TODAS as flags originais."""
@@ -191,10 +191,13 @@ def main():
         # SEMPRE usar aws_config.json - SEM hardcoded values!
         from kuber_bomber.utils.aws_config_loader import require_aws_config
         aws_config = require_aws_config()
+        kE = KubectlExecutor(aws_config=aws_config)
+        
         
         # Aplicações padrão (única coisa que pode ser hardcoded)
-        aws_apps = ["bar-app", "foo-app", "test-app"]
-        aws_config['applications'] = aws_apps
+        aws_apps_info = kE.get_pods_info()
+        aws_apps = [app['name'] for app in aws_apps_info]
+        aws_config['applications'] = aws_apps_info
         
         print(f"📱 Aplicações: {', '.join(aws_apps)}")
         print("✅ Configuração AWS carregada")

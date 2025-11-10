@@ -117,7 +117,7 @@ class ReliabilityTester:
                 # 'shutdown_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método por ora
                 'restart_worker_node': self.aws_injector.kill_worker_node_processes,  # Usa mesmo método 
                 'kill_kubelet': self.aws_injector.kill_kubelet,
-                'delete_kube_proxy': self.aws_injector.delete_kube_proxy_pod,
+                'delete_kube_proxy': self.aws_injector.kill_kube_proxy_pod,
                 'restart_containerd': self.aws_injector.restart_containerd,
                 
                 # === CONTROL PLANE FAILURES ===
@@ -802,8 +802,6 @@ class ReliabilityTester:
         import time
         from concurrent.futures import ThreadPoolExecutor
 
-        pods_info = self.kubectl.get_pods_info()
-        all_healthy = True
             
         start_time = time.time()
         timeout = self.config.current_recovery_timeout
@@ -849,6 +847,9 @@ class ReliabilityTester:
                 return False
 
         while time.time() - start_time < timeout:
+            pods_info = self.kubectl.get_pods_info()
+            all_healthy = True
+            
             elapsed = time.time() - start_time
             check_num = int(elapsed / check_interval) + 1
 

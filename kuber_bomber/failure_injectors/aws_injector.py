@@ -246,11 +246,11 @@ class AWSFailureInjector:
         else:
             return False, f"Falha ao matar kubelet em {node_name}. Results: {'; '.join(results)}"
     
-    def delete_kube_proxy_pod(self, node_name: str) -> Tuple[bool, str]:
+    def kill_kube_proxy_pod(self, node_name: str) -> Tuple[bool, str]:
         """
         EXATO da tabela: Remove kube-proxy via SSH direto.
         """
-        print(f"💀 EXECUTANDO: delete kube-proxy pod no node {node_name}")
+        print(f"💀 EXECUTANDO: kill kube-proxy pod no node {node_name}")
         
         # Comandos rigorosos para matar kube-proxy
         commands = [
