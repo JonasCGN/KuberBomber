@@ -1799,7 +1799,7 @@ class AvailabilitySimulator:
             # Injetar falha
             failure_method = next_event.component.get_random_failure_method()
             if self.inject_failure(next_event.component, failure_method):
-                time.sleep(2)  # Pequeno delay antes de checar recuperação
+                # time.sleep(2)  # Pequeno delay antes de checar recuperação
                 
                 _,recovery_time = self.health_checker.wait_for_pods_recovery()
                 next_event.component.total_downtime += recovery_time

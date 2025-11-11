@@ -104,7 +104,7 @@ generate_config_all_aws:
 	cd ./ && python3 -m kuber_bomber.cli.availability_cli --get-config-all --force-aws
 
 ssh_cli_cp:
-	ssh -i ~/.ssh/vockey.pem ubuntu@44.223.81.203
+	ssh -i ~/.ssh/vockey.pem ubuntu@3.80.142.221
 
 ssh_cli_wn:
 	ssh -i ~/.ssh/vockey.pem ubuntu@13.220.170.35

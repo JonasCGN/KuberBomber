@@ -1171,7 +1171,8 @@ class HealthChecker:
                     
 
                 if all_healthy and current_pods:
-                    recovery_time = ultimo_tempo - start_time - tempo_get_pods
+                    recovery_time = ultimo_tempo - start_time
+                    # recovery_time = ultimo_tempo - start_time - tempo_get_pods
                     
                     print(f"🎉 Todos os pods responderam via curl (HTTP 200 ou 404)!")
                     print(f"⏱️ Tempo de recuperação: {recovery_time:.2f}s")
@@ -1182,8 +1183,8 @@ class HealthChecker:
                 current_pods = self.kubectl.get_pods_info()
                 tempo_get_pods += time.time() - tempo_get_pods_start
                     
-                print(f"⏸️ Aguardando {check_interval}s...")
-                time.sleep(check_interval)
+                # print(f"⏸️ Aguardando {check_interval}s...")
+                # time.sleep(check_interval)
             
             final_time = ultimo_tempo - start_time
             # final_time = ultimo_tempo - start_time - tempo_get_pods
