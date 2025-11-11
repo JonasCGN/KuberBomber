@@ -1095,20 +1095,15 @@ class HealthChecker:
         print(f"⏳ Aguardando recuperação via CURL do sistema...")
         print(f"📊 Timeout: {timeout}s | Verificação a cada {check_interval}s")
 
-        pods_info = []
-        pods_lock = threading.Lock()
+        # def update_pods_info():
+        #     while not stop_thread.is_set():
+        #         info = self.kubectl.get_pods_info()
+        #         with pods_lock:
+        #             pods_info.clear()
+        #             pods_info.extend(info)
+        #         time.sleep(check_interval)
+    
         stop_thread = threading.Event()
-
-        def update_pods_info():
-            while not stop_thread.is_set():
-                info = self.kubectl.get_pods_info()
-                with pods_lock:
-                    pods_info.clear()
-                    pods_info.extend(info)
-                time.sleep(check_interval)
-
-        updater_thread = threading.Thread(target=update_pods_info, daemon=True)
-        updater_thread.start()
 
         def fetch(pod_info):
             pod_ip = pod_info.get('ip')
@@ -1147,17 +1142,23 @@ class HealthChecker:
                 return False
             
         try:
+            # tempo_get_pods_start = time.time()
+            current_pods = self.kubectl.get_pods_info()
+            # tempo_get_pods += time.time() - tempo_get_pods_start
+            
             start_time = time.time()
+            ultimo_tempo = time.time()
+            
+            tempo_get_pods = 0.0
+            
             while time.time() - start_time < timeout:
-                with pods_lock:
-                    current_pods = list(pods_info)
-                all_healthy = True
+                ultimo_tempo = time.time()
 
                 elapsed = time.time() - start_time
                 check_num = int(elapsed / check_interval) + 1
 
                 print(f"\n🔍 Verificação #{check_num} (tempo: {elapsed:.1f}s/{timeout}s)")
-
+                
                 if current_pods:
                     with ThreadPoolExecutor(max_workers=len(current_pods)) as executor:
                         results = list(executor.map(fetch, current_pods))
@@ -1167,25 +1168,31 @@ class HealthChecker:
                             print(f"❌ Pod {current_pods[idx]['name']} ainda não responde via curl")
                 else:
                     all_healthy = False
+                    
 
                 if all_healthy and current_pods:
-                    recovery_time = time.time() - start_time
+                    recovery_time = ultimo_tempo - start_time - tempo_get_pods
+                    
                     print(f"🎉 Todos os pods responderam via curl (HTTP 200 ou 404)!")
                     print(f"⏱️ Tempo de recuperação: {recovery_time:.2f}s")
                     stop_thread.set()
-                    updater_thread.join(timeout=1)
                     return True, recovery_time
-
+                
+                tempo_get_pods_start = time.time()
+                current_pods = self.kubectl.get_pods_info()
+                tempo_get_pods += time.time() - tempo_get_pods_start
+                    
                 print(f"⏸️ Aguardando {check_interval}s...")
                 time.sleep(check_interval)
-
-            final_time = time.time() - start_time
+            
+            final_time = ultimo_tempo - start_time
+            # final_time = ultimo_tempo - start_time - tempo_get_pods
+            
             print(f"⏰ Timeout de {final_time:.1f}s atingido")
+            print(f"⏰ Tempo de verificacao de pods {tempo_get_pods:.1f}s")
             
             stop_thread.set()
-            updater_thread.join(timeout=1)
             return False, final_time
         except Exception as e:
             stop_thread.set()
-            updater_thread.join(timeout=1)
             raise e

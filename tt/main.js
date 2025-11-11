@@ -67,7 +67,7 @@ function stopAutoClick() {
 }
 
 // --- CONFIGURAÇÃO DO INTERVALO ---
-const segundos = 10800;
+const segundos = 10800; // A cada 3h
 const intervalo = segundos * 1000; // 5000 ms = 5 segundos
 
 // --- INICIAR AUTOMATICAMENTE ---
