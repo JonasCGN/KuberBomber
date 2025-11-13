@@ -49,16 +49,15 @@ class Component:
             if self.mttf_key == "pod" or self.component_type == "pod":
                 self.available_failure_methods = [
                     "kill_all_processes",
-                    "kill_init_process"
                 ]
             elif self.mttf_key == "container":
                 self.available_failure_methods = [
                     "kill_all_processes",
-                    "kill_init_process"
                 ]
             elif self.mttf_key == "worker_node" or (self.component_type == "node" and not self.mttf_key):
                 self.available_failure_methods = [
-                    "kill_worker_node_processes",
+                    # "kill_worker_node_processes",
+                    "shutdown_worker_node"
                 ]
             elif self.mttf_key == "wn_runtime":
                 self.available_failure_methods = [
@@ -1235,10 +1234,10 @@ class AvailabilitySimulator:
             else:
                 success, _ = self.node_injector.kill_worker_node_processes(node_name)
         elif failure_method == "shutdown_worker_node":
-            if self.is_aws_mode and self.aws_injector:
-                success, _ = self.aws_injector.kill_worker_node_processes(node_name)
-            else:
-                success = self._handle_shutdown_worker_node(node_name)
+            # CORREÇÃO: Usar o método especial _handle_shutdown_worker_node em ambos os casos
+            success, shutdown_recovery_time = self._handle_shutdown_worker_node(node_name)
+            # Armazenar o tempo de recuperação para uso posterior no loop principal
+            self._last_shutdown_recovery_time = shutdown_recovery_time
         else:
             # Fallback
             if self.is_aws_mode and self.aws_injector:
@@ -1798,11 +1797,19 @@ class AvailabilitySimulator:
             
             # Injetar falha
             failure_method = next_event.component.get_random_failure_method()
-            if self.inject_failure(next_event.component, failure_method):
-                # time.sleep(2)  # Pequeno delay antes de checar recuperação
-                
-                _,recovery_time = self.health_checker.wait_for_pods_recovery()
-                next_event.component.total_downtime += recovery_time
+            injection_success = self.inject_failure(next_event.component, failure_method)
+            
+            if injection_success:
+                # Para shutdown_worker_node, usar o tempo calculado no método _handle_shutdown_worker_node
+                if failure_method == "shutdown_worker_node":
+                    # O _handle_shutdown_worker_node já fez todo o processo incluindo health check
+                    # E já adicionou o MTTR configurado ao total_downtime do componente
+                    # Usar o tempo correto que foi calculado (MTTR configurado)
+                    recovery_time = getattr(self, '_last_shutdown_recovery_time', 0.0)
+                else:
+                    # Para outras falhas, fazer verificação normal
+                    _, recovery_time = self.health_checker.wait_for_pods_recovery()
+                    next_event.component.total_downtime += recovery_time
                 
                 # Aguardar 1 minuto real (delay fixo) - DEPOIS da recuperação
                 print(f"⏸️ Aguardando {self.real_delay_between_failures}s (delay entre falhas)...")
@@ -2508,14 +2515,18 @@ class AvailabilitySimulator:
         
         print("✅ Verificação de cálculos concluída")
     
-    def _handle_shutdown_worker_node(self, node_name: str) -> bool:
+    def _handle_shutdown_worker_node(self, node_name: str) -> tuple[bool, float]:
         """
         Lógica especial para shutdown de worker node.
         
+        PROCESSO CORRETO:
         1. Desliga o nó
-        2. Aguarda MTTR configurado no ConfigSimples (ou 60s se não configurado)
+        2. Aguarda delay configurado do teste (campo "delay", não MTTR)
         3. Religa o nó automaticamente (self-healing)
-        4. Contabiliza MTTR configurado para estatísticas
+        4. Verifica com health checker quando aplicações voltaram
+        
+        Returns:
+            Tuple com (sucesso, tempo_recuperacao_segundos)
         """
         try:
             import time
@@ -2523,39 +2534,109 @@ class AvailabilitySimulator:
             print(f"  🔌 Desligando worker node: {node_name}")
             
             # 1. Desligar o nó usando node_injector
-            shutdown_success, shutdown_command = self.node_injector.shutdown_worker_node(node_name)
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                shutdown_success, shutdown_command = self.aws_injector.shutdown_worker_node(node_name)
+            else:
+                shutdown_success, shutdown_command = self.node_injector.shutdown_worker_node(node_name)
+                
             if not shutdown_success:
                 print(f"  ❌ Falha ao desligar nó {node_name}")
-                return False
+                return False, 0.0
             
-            # 2. Obter MTTR configurado no ConfigSimples para contabilização
-            mttr_hours = 1.0  # Default de 1h simulada
-            mttr_seconds_real = 60  # Sempre 60s reais para testes
+            # 2. Obter delay configurado do teste (NÃO o MTTR)
+            delay_seconds = 10  # Default 
+            mttr_hours = 0.016  # MTTR padrão para contabilização
             
             if hasattr(self, '_config_simples') and self._config_simples:
-                mttr_hours = self._config_simples.get_mttr('worker_node')
-                if mttr_hours > 0:
-                    print(f"  ⚙️ MTTR configurado: {mttr_hours}h simuladas (60s reais)")
+                # O _config_simples é uma instância da classe ConfigSimples, não um dict
+                if hasattr(self._config_simples, 'delay'):
+                    delay_seconds = self._config_simples.delay
+                    print(f"  📊 Delay do teste configurado: {delay_seconds}s")
+                
+                # Obter MTTR para contabilização final
+                if hasattr(self._config_simples, 'get_mttr'):
+                    try:
+                        mttr_hours = self._config_simples.get_mttr(node_name)
+                        print(f"  📊 MTTR configurado para contabilização: {mttr_hours:.4f}h ({mttr_hours*3600:.1f}s)")
+                    except Exception as e:
+                        print(f"  ⚠️ Erro ao obter MTTR configurado, usando padrão: {e}")
                 else:
-                    print(f"  ⚙️ MTTR padrão: {mttr_hours}h simuladas (60s reais)")
-            
-            print(f"  ⏱️ Aguardando 60s reais (simulando {mttr_hours}h de downtime)...")
-            time.sleep(mttr_seconds_real)
-            
-            # 3. Religar o nó automaticamente usando node_injector  
-            print(f"  � Self-healing: Religando worker node: {node_name}")
-            startup_success, startup_command = self.node_injector.start_worker_node(node_name)
-            
-            if startup_success:
-                print(f"  ✅ Worker node {node_name} religado com sucesso")
-                return True
+                    print(f"  ⚠️ Config simples sem método get_mttr, usando MTTR padrão")
             else:
+                print(f"  ⚠️ Config não disponível, usando delay padrão: {delay_seconds}s")
+            
+            # 3. Aguardar delay configurado do teste (NÃO MTTR)
+            print(f"  ⏱️ Aguardando delay configurado do teste: {delay_seconds}s...")
+            time.sleep(delay_seconds)
+            
+            # 4. Religar o nó automaticamente
+            print(f"  🔄 Self-healing: Religando worker node: {node_name}")
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                startup_success, startup_command = self.aws_injector.start_worker_node(node_name)
+            else:
+                startup_success, startup_command = self.node_injector.start_worker_node(node_name)
+            
+            if not startup_success:
                 print(f"  ❌ Falha ao religar nó {node_name}")
-                return False
+                return False, 0.0
+            
+            print(f"  ✅ Worker node {node_name} religado com sucesso")
+            
+            # 5. CORREÇÃO: Aguardar aplicações ficarem ativas com health checker
+            print(f"  ⚕️ Aguardando aplicações ficarem ativas com health checker...")
+            health_check_start = time.time()
+            
+            # Usar health checker para verificação real (mas não contabilizar o tempo)
+            if hasattr(self, 'health_checker') and self.health_checker:
+                # Descobrir aplicações se não estão em cache
+                discovered_apps = None
+                if hasattr(self, 'availability_criteria'):
+                    discovered_apps = list(self.availability_criteria.keys())
+                
+                apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
+                    timeout=180,  # 3 minutos timeout
+                    discovered_apps=discovered_apps
+                )
+                
+                if apps_recovered:
+                    print(f"  ✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
+                    # CORREÇÃO: NÃO somar tempo real, usar apenas MTTR configurado
+                    mttr_seconds = mttr_hours * 3600
+                    print(f"  📊 Usando apenas MTTR configurado: {mttr_seconds:.1f}s (não contabilizando tempo real de {health_check_time:.1f}s)")
+                    
+                    # Armazenar o MTTR configurado no componente para uso posterior
+                    component = next((c for c in self.components if c.name == f"worker_node-{node_name}"), None)
+                    if component:
+                        component.total_downtime += mttr_seconds
+                    
+                    return True, mttr_seconds
+                else:
+                    print(f"  ⚠️ Aplicações não ficaram ativas no timeout (180s)")
+                    # Mesmo assim, considera recuperado com MTTR configurado
+                    print(f"  📊 Usando MTTR configurado mesmo com timeout: {mttr_hours*3600:.1f}s")
+                    
+                    # Armazenar o MTTR configurado mesmo com timeout
+                    component = next((c for c in self.components if c.name == f"worker_node-{node_name}"), None)
+                    if component:
+                        component.total_downtime += mttr_hours * 3600
+                    
+                    return True, mttr_hours * 3600  # Considera recuperado mesmo se timeout
+            else:
+                # Fallback: aguardar tempo fixo se health_checker não disponível
+                print(f"  ⚠️ Health checker não disponível, usando fallback de 60s...")
+                time.sleep(60)
+                print(f"  📊 Shutdown completo com fallback: usando MTTR configurado {mttr_hours*3600:.1f}s")
+                
+                # Armazenar o MTTR configurado para fallback
+                component = next((c for c in self.components if c.name == f"worker_node-{node_name}"), None)
+                if component:
+                    component.total_downtime += mttr_hours * 3600
+                
+                return True, mttr_hours * 3600
                 
         except Exception as e:
             print(f"  ❌ Erro durante shutdown/startup de {node_name}: {e}")
-            return False
+            return False, 0.0
     
     def _save_iteration_results(self, iteration: int, iteration_results: Dict):
         """Salva resultados de uma iteração individual."""

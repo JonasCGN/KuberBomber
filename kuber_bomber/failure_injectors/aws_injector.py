@@ -275,23 +275,135 @@ class AWSFailureInjector:
         
         # Comandos rigorosos para reiniciar containerd
         commands = [
-            # "sudo systemctl restart containerd",  
+            # "sudo -n systemctl restart containerd",  # Primeiro tentar restart normal
             "sudo -n pkill -9 -f containerd",
-            # "sudo systemctl stop containerd && sudo systemctl start containerd",
-            # "sudo pkill -9 -f containerd && sudo systemctl start containerd"
+            # "sudo -n systemctl start containerd",
         ]
         
         results = []
         for cmd in commands:
-            success, output = self._execute_ssh_command(node_name, cmd, timeout=30)
+            success, output = self._execute_ssh_command(node_name, cmd, timeout=15)
             results.append(f"{cmd}: {'✅' if success else '❌'}")
-            if success:  # Se um comando funcionou, parar
-                break
                 
         if any("✅" in r for r in results):
-            return True, f"Containerd restarted on {node_name}. Results: {'; '.join(results)}"
+            return True, f"restart_containerd {node_name}"
         else:
-            return False, f"Falha ao reiniciar containerd em {node_name}. Results: {'; '.join(results)}"
+            return False, f"restart_containerd {node_name} (failed)"
+
+    def shutdown_worker_node(self, node_name: str) -> Tuple[bool, str]:
+        """
+        Desliga completamente um worker node via SSH (shutdown).
+        
+        Args:
+            node_name: Nome do worker node
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        print(f"⛔ EXECUTANDO: shutdown worker node {node_name}")
+        
+        # Comando para desligar o worker node
+        command = "sudo -n shutdown -h now"
+        
+        success, output = self._execute_ssh_command(node_name, command, timeout=30)
+        
+        if success or "connection closed" in output.lower():
+            print(f"✅ Worker node {node_name} desligado completamente")
+            return True, f"shutdown_worker_node {node_name}"
+        else:
+            print(f"❌ Erro ao desligar {node_name}: {output}")
+            return False, f"shutdown_worker_node {node_name} (failed)"
+
+    def start_worker_node(self, node_name: str) -> Tuple[bool, str]:
+        """
+        Liga um worker node desligado via AWS EC2 start-instances.
+        
+        Args:
+            node_name: Nome do worker node
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        print(f"▶️ EXECUTANDO: start worker node {node_name}")
+        
+        try:
+            # Obter ID da instância a partir do nome
+            instances = self._get_aws_instances()
+            
+            if node_name not in instances:
+                return False, f"start_worker_node {node_name} (instance not found)"
+            
+            instance_id = instances[node_name]['ID']
+            
+            # CORREÇÃO: Aguardar instância ficar "stopped" antes de tentar ligar
+            print(f"⏱️ Aguardando instância {instance_id} ficar 'stopped'...")
+            if not self._wait_for_instance_state(instance_id, "stopped", timeout=60):
+                print(f"⚠️ Instância {instance_id} não ficou 'stopped' no timeout esperado")
+                # Continuar tentando mesmo assim
+            
+            # Comando para iniciar a instância via AWS CLI
+            cmd = ['aws', 'ec2', 'start-instances', '--instance-ids', instance_id]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                print(f"✅ Worker node {node_name} ({instance_id}) ligado com sucesso")
+                return True, f"start_worker_node {node_name}"
+            else:
+                print(f"❌ Erro ao ligar {node_name}: {result.stderr}")
+                return False, f"start_worker_node {node_name} (failed)"
+                
+        except Exception as e:
+            print(f"❌ Exceção ao ligar {node_name}: {e}")
+            return False, f"start_worker_node {node_name} (error: {e})"
+    
+    def _wait_for_instance_state(self, instance_id: str, target_state: str, timeout: int = 60) -> bool:
+        """
+        Aguarda uma instância AWS atingir um estado específico.
+        
+        Args:
+            instance_id: ID da instância AWS
+            target_state: Estado alvo ('stopped', 'running', 'pending', etc.)
+            timeout: Timeout em segundos
+            
+        Returns:
+            True se a instância atingiu o estado, False caso contrário
+        """
+        import time
+        
+        print(f"⏳ Aguardando instância {instance_id} ficar '{target_state}' (timeout: {timeout}s)...")
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                cmd = ['aws', 'ec2', 'describe-instances', '--instance-ids', instance_id,
+                       '--query', 'Reservations[0].Instances[0].State.Name', '--output', 'text']
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    current_state = result.stdout.strip()
+                    print(f"  📊 Estado atual: {current_state}")
+                    
+                    if current_state == target_state:
+                        print(f"  ✅ Instância {instance_id} está '{target_state}'!")
+                        return True
+                        
+                    # Se está em estado de erro, não continuar aguardando
+                    if current_state in ['terminated', 'terminating']:
+                        print(f"  ❌ Instância em estado crítico: {current_state}")
+                        return False
+                        
+                else:
+                    print(f"  ⚠️ Erro ao verificar estado: {result.stderr}")
+                    
+            except Exception as e:
+                print(f"  ⚠️ Exceção ao verificar estado: {e}")
+            
+            time.sleep(3)  # Verificar a cada 3 segundos
+        
+        print(f"  ⏰ Timeout: instância {instance_id} não ficou '{target_state}' em {timeout}s")
+        return False
     
     # ===== MÉTODOS PARA CONTROL PLANE =====
     
