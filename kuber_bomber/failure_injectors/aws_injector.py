@@ -520,3 +520,95 @@ class AWSFailureInjector:
             return True, f"Etcd killed on {node_name}. Results: {'; '.join(results)}"
         else:
             return False, f"Falha ao matar etcd em {node_name}. Results: {'; '.join(results)}"
+    
+    def shutdown_control_plane(self, node_name: str) -> Tuple[bool, str]:
+        """
+        Desliga completamente o control plane via AWS (stop instância).
+        Segue a mesma lógica do shutdown_worker_node.
+        
+        Args:
+            node_name: Nome do control plane
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        try:
+            print(f"⛔ Desligando control plane {node_name}...")
+            
+            # Obter informações da instância
+            instances = self._get_aws_instances()
+            
+            if node_name not in instances:
+                print(f"❌ Control plane {node_name} não encontrado")
+                return False, f"shutdown_control_plane {node_name}"
+            
+            instance = instances[node_name]
+            instance_id = instance['ID']
+            
+            # Parar a instância AWS
+            cmd = ['aws', 'ec2', 'stop-instances', '--instance-ids', instance_id]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                print(f"❌ Erro ao parar instância {instance_id}: {result.stderr}")
+                return False, f"shutdown_control_plane {node_name}"
+            
+            print(f"✅ Comando de shutdown enviado para {node_name} (instância {instance_id})")
+            
+            # Aguardar a instância ficar stopped
+            if self._wait_for_instance_state(instance_id, 'stopped', timeout=60):
+                print(f"✅ Control plane {node_name} foi desligado com sucesso")
+                return True, f"shutdown_control_plane {node_name}"
+            else:
+                print(f"⚠️ Control plane {node_name} não ficou stopped no tempo esperado")
+                return False, f"shutdown_control_plane {node_name}"
+                
+        except Exception as e:
+            print(f"❌ Erro ao desligar control plane {node_name}: {e}")
+            return False, f"shutdown_control_plane {node_name} (error: {e})"
+    
+    def start_control_plane(self, node_name: str) -> Tuple[bool, str]:
+        """
+        Liga o control plane desligado.
+        Self-healing automático após shutdown_control_plane.
+        
+        Args:
+            node_name: Nome do control plane
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        try:
+            print(f"▶️ Ligando control plane {node_name}...")
+            
+            # Obter informações da instância
+            instances = self._get_aws_instances()
+            
+            if node_name not in instances:
+                print(f"❌ Control plane {node_name} não encontrado")
+                return False, f"start_control_plane {node_name}"
+            
+            instance = instances[node_name]
+            instance_id = instance['ID']
+            
+            # Iniciar a instância AWS
+            cmd = ['aws', 'ec2', 'start-instances', '--instance-ids', instance_id]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                print(f"❌ Erro ao ligar instância {instance_id}: {result.stderr}")
+                return False, f"start_control_plane {node_name}"
+            
+            print(f"✅ Comando de startup enviado para {node_name} (instância {instance_id})")
+            
+            # Aguardar a instância ficar running
+            if self._wait_for_instance_state(instance_id, 'running', timeout=120):
+                print(f"✅ Control plane {node_name} foi ligado com sucesso")
+                return True, f"start_control_plane {node_name}"
+            else:
+                print(f"⚠️ Control plane {node_name} não ficou running no tempo esperado")
+                return False, f"start_control_plane {node_name}"
+                
+        except Exception as e:
+            print(f"❌ Erro ao ligar control plane {node_name}: {e}")
+            return False, f"start_control_plane {node_name} (error: {e})"

@@ -267,3 +267,71 @@ class NodeFailureInjector:
         except subprocess.CalledProcessError as e:
             print(f"❌ Erro ao ligar {target}: {e}")
             return False, command
+
+    def shutdown_control_plane(self, target: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Desliga completamente um control plane (docker stop).
+        Segue a mesma lógica do shutdown_worker_node.
+        
+        Args:
+            target: Nome do control plane
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        if target is None:
+            from kuber_bomber.monitoring.system_monitor import SystemMonitor
+            monitor = SystemMonitor()
+            target = monitor.get_control_plane_node()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
+        command = f"docker stop {target}"
+        print(f"⛔ Executando: {command}")
+        print(f"🎛️ Desligando control plane {target} completamente...")
+        
+        try:
+            result = subprocess.run([
+                'docker', 'stop', target
+            ], capture_output=True, text=True, check=True)
+            
+            print(f"✅ Control plane {target} desligado completamente")
+            return True, command
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erro ao desligar control plane {target}: {e}")
+            return False, command
+
+    def start_control_plane(self, target: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Liga um control plane desligado (docker start).
+        Self-healing automático após shutdown_control_plane.
+        
+        Args:
+            target: Nome do control plane
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        if target is None:
+            from kuber_bomber.monitoring.system_monitor import SystemMonitor
+            monitor = SystemMonitor()
+            target = monitor.get_control_plane_node()
+            if not target:
+                return False, "Não foi possível descobrir control plane automaticamente"
+                
+        command = f"docker start {target}"
+        print(f"▶️ Executando: {command}")
+        print(f"🎛️ Ligando control plane {target}...")
+        
+        try:
+            result = subprocess.run([
+                'docker', 'start', target
+            ], capture_output=True, text=True, check=True)
+            
+            print(f"✅ Control plane {target} ligado com sucesso")
+            return True, command
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erro ao ligar control plane {target}: {e}")
+            return False, command

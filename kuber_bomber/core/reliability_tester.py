@@ -122,6 +122,7 @@ class ReliabilityTester:
                 
                 # === CONTROL PLANE FAILURES ===
                 'kill_control_plane_processes': self.aws_injector.kill_control_plane_processes,
+                'shutdown_control_plane': self._shutdown_control_plane_wrapper,  # Wrapper para passar delay configurado
                 'kill_kube_apiserver': self.aws_injector.kill_kube_apiserver,
                 'kill_kube_controller_manager': self.aws_injector.kill_kube_controller_manager,
                 'kill_kube_scheduler': self.aws_injector.kill_kube_scheduler,
@@ -142,6 +143,7 @@ class ReliabilityTester:
                 
                 # === CONTROL PLANE FAILURES ===
                 'kill_control_plane_processes': self.node_injector.kill_control_plane_processes,
+                'shutdown_control_plane': self._shutdown_control_plane_wrapper,  # Wrapper para passar delay configurado
                 'kill_kube_apiserver': self.control_plane_injector.kill_kube_apiserver,
                 'kill_kube_controller_manager': self.control_plane_injector.kill_kube_controller_manager,
                 'kill_kube_scheduler': self.control_plane_injector.kill_kube_scheduler,
@@ -204,6 +206,22 @@ class ReliabilityTester:
         
         # Chamar o handler real com delay configurado
         return self._shutdown_worker_node_handler(target, delay_seconds)
+    
+    def _shutdown_control_plane_wrapper(self, target: str) -> Tuple[bool, str]:
+        """
+        Wrapper para shutdown_control_plane que obtém delay da configuração.
+        Segue a mesma lógica do shutdown_worker_node.
+        """
+        # Obter delay da configuração
+        delay_seconds = 10  # Default
+        
+        if hasattr(self, 'config') and self.config:
+            config_simples = getattr(self.config, 'config_simples', None)
+            if config_simples and isinstance(config_simples, dict):
+                delay_seconds = config_simples.get('delay', delay_seconds)
+        
+        # Chamar o handler real com delay configurado
+        return self._shutdown_control_plane_handler(target, delay_seconds)
     
     def run_reliability_test(self, component_type: str, failure_method: str, 
                            target: Optional[str] = None, iterations: int = 30, 
@@ -851,6 +869,118 @@ class ReliabilityTester:
             time.sleep(5)
         
         return False
+
+    def _shutdown_control_plane_handler(self, target: str, delay_seconds: int = 10) -> Tuple[bool, str]:
+        """
+        Handler especial para shutdown de control plane com delay configurado + auto-start.
+        
+        Processo CORRETO:
+        1. Desliga o control plane (shutdown ou docker stop)
+        2. Aguarda delay configurado do teste de simulação (não MTTR)
+        3. Religa automaticamente (auto-start ou docker start) - self-healing
+        4. Verifica com health checker quando aplicações voltaram
+        
+        Tempo de recuperação = MTTR configurado + tempo real de health check
+        
+        Args:
+            target: Nome do control plane para desligar
+            delay_seconds: Delay configurado do teste (campo "delay" do config_simples)
+            
+        Returns:
+            Tuple com (sucesso, comando_executado)
+        """
+        try:
+            import time
+            
+            # 1. Obter MTTR configurado para contabilização final
+            mttr_hours = 0.025  # MTTR padrão de ~1.5 minutos se não encontrar configuração
+            
+            # Verificar se existe configuração MTTR
+            if hasattr(self, 'config') and self.config:
+                config_simples = getattr(self.config, 'config_simples', None)
+                if config_simples and isinstance(config_simples, dict):
+                    mttr_config = config_simples.get('mttr_config', {})
+                    control_plane_mttr = mttr_config.get('control_plane', {})
+                    mttr_hours = control_plane_mttr.get(target, mttr_hours)
+                    print(f"📊 MTTR configurado para contabilização: {mttr_hours:.4f}h ({mttr_hours*3600:.1f}s)")
+                    
+                    # CORREÇÃO: Usar delay do teste, não MTTR
+                    test_delay = config_simples.get('delay', delay_seconds)
+                    print(f"📊 Delay do teste configurado: {test_delay}s")
+                    delay_seconds = test_delay
+                else:
+                    print(f"⚠️ Configuração não encontrada, usando delay padrão: {delay_seconds}s")
+            else:
+                print(f"⚠️ Config não disponível, usando delay padrão: {delay_seconds}s")
+            
+            # 2. Executar shutdown do control plane
+            print(f"🔌 Desligando control plane: {target}")
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                shutdown_success, shutdown_command = self.aws_injector.shutdown_control_plane(target)
+            else:
+                shutdown_success, shutdown_command = self.node_injector.shutdown_control_plane(target)
+            
+            if not shutdown_success:
+                print(f"❌ Falha ao desligar control plane {target}")
+                return False, f"shutdown_control_plane {target}"
+            
+            print(f"✅ Control plane {target} desligado com sucesso")
+            
+            # 3. Aguardar delay configurado do teste (NÃO o MTTR)
+            print(f"⏱️ Aguardando delay configurado do teste: {delay_seconds}s...")
+            time.sleep(delay_seconds)
+            
+            # 4. Self-healing: Religar automaticamente
+            print(f"🔄 Self-healing: Religando control plane {target}...")
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                startup_success, startup_command = self.aws_injector.start_control_plane(target)
+            else:
+                startup_success, startup_command = self.node_injector.start_control_plane(target)
+            
+            if not startup_success:
+                print(f"❌ Falha no self-healing de {target}")
+                print(f"🚨 ATENÇÃO: Control plane {target} pode estar offline permanentemente!")
+                return False, f"shutdown_control_plane {target} (recovery-failed)"
+            
+            print(f"✅ Control plane {target} religado com sucesso")
+            
+            # 5. CORREÇÃO ESPECÍFICA PARA KIND: Reiniciar networking (apenas para modo local)
+            if not self.is_aws_mode:
+                print(f"🌐 Corrigindo conectividade de rede no Kind para {target}...")
+                self._fix_kind_networking(target)
+            
+            # 6. Aguardar control plane ficar Ready
+            print(f"⏱️ Aguardando control plane {target} ficar Ready...")
+            node_ready = self._wait_for_node_ready(target, timeout=180)  # 3 minutos para AWS
+            
+            if not node_ready:
+                print(f"⚠️ Control plane {target} não ficou Ready no tempo esperado")
+            
+            # 7. CORREÇÃO: Aguardar aplicações ficarem ativas com health checker
+            print(f"⚕️ Aguardando aplicações ficarem ativas com health checker...")
+            
+            # Usar health checker para verificar recuperação real (mas não contabilizar o tempo)
+            apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
+                timeout=self.config.current_recovery_timeout,
+                discovered_apps=getattr(self, 'discovered_apps', None)
+            )
+            
+            if apps_recovered:
+                print(f"✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
+                # CORREÇÃO: Retornar apenas o MTTR configurado, não somar tempos reais
+                mttr_seconds = mttr_hours * 3600
+                print(f"📊 Retornando MTTR configurado: {mttr_seconds:.1f}s (não contabilizando tempo real de {health_check_time:.1f}s)")
+                return True, f"shutdown_control_plane {target} (recovered, MTTR: {mttr_seconds:.1f}s)"
+            else:
+                print(f"⚠️ Aplicações não ficaram ativas no timeout configurado ({self.config.current_recovery_timeout}s)")
+                # Mesmo assim, retornar MTTR configurado 
+                mttr_seconds = mttr_hours * 3600
+                print(f"📊 Retornando MTTR configurado mesmo com recovery parcial: {mttr_seconds:.1f}s")
+                return True, f"shutdown_control_plane {target} (partial-recovery, MTTR: {mttr_seconds:.1f}s)"
+                
+        except Exception as e:
+            print(f"❌ Erro durante shutdown/recovery de control plane {target}: {e}")
+            return False, f"shutdown_control_plane {target} (error: {e})"
 
     @property
     def component_metrics(self):

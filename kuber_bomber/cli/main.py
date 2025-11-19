@@ -81,7 +81,8 @@ Tipos de timeout disponíveis:
                            'kill_worker_node_processes', 'restart_worker_node', 'kill_kubelet',
                            'shutdown_worker_node',  # Adicionar shutdown de VM
                            # Control Plane failures
-                           'kill_control_plane_processes', 'kill_kube_apiserver', 
+                           'kill_control_plane_processes', 'shutdown_control_plane',  # Novo método
+                           'kill_kube_apiserver', 
                            'kill_kube_controller_manager', 'kill_kube_scheduler', 'kill_etcd',
                            # Network failures
                            'delete_kube_proxy', 'restart_containerd'

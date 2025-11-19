@@ -73,6 +73,7 @@ class Component:
                 ]
             elif self.mttf_key == "control_plane" or (self.component_type == "control_plane" and not self.mttf_key):
                 self.available_failure_methods = [
+                    "shutdown_control_plane",
                     "kill_control_plane_processes",
                 ]
             elif self.mttf_key == "cp_apiserver":
@@ -1363,6 +1364,11 @@ class AvailabilitySimulator:
                 success, _ = self.aws_injector.kill_control_plane_processes(node_name)
             else:
                 success = self.node_injector.kill_control_plane_processes(node_name)
+        elif failure_method == "shutdown_control_plane":
+            # CORREÇÃO: Usar o método especial _handle_shutdown_control_plane em ambos os casos
+            success, shutdown_recovery_time = self._handle_shutdown_control_plane(node_name)
+            # Armazenar o tempo de recuperação para uso posterior no loop principal
+            self._last_shutdown_recovery_time = shutdown_recovery_time
         else:
             # Fallback
             if self.is_aws_mode and self.aws_injector:
@@ -1565,84 +1571,6 @@ class AvailabilitySimulator:
         
         return system_available, availability_details
     
-    # def wait_for_recovery(self, component: Component) -> float:
-    #     """
-    #     Aguarda recuperação real do componente verificando requisições HTTP.
-        
-    #     Args:
-    #         component: Componente a aguardar recuperação
-            
-    #     Returns:
-    #         Tempo real de recuperação em segundos
-    #     """
-    #     print(f"⏳ Aguardando recuperação de {component.name}...")
-        
-    #     start_time = time.time()
-    #     check_interval = 2  # verificar a cada 2 segundos
-        
-    #     while True:  # Aguarda indefinidamente até recuperar
-    #         try:
-    #             if component.component_type == "pod":
-    #                 # CORREÇÃO: Usar descoberta dinâmica diretamente
-    #                 app_name = component.name  # Manter nome completo (ex: bar-app)
-                    
-    #                 # Usar health_checker com descoberta dinâmica
-    #                 health_result = self.health_checker.check_application_health(app_name, verbose=False)
-                    
-    #                 if health_result.get('healthy', False):
-    #                     recovery_time = time.time() - start_time
-    #                     url_info = health_result.get('url_type', 'health check')
-    #                     print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s ({url_info})")
-    #                     component.current_status = 'healthy'
-                        
-    #                     return recovery_time
-                    
-    #                 # NÃO usar fallback de pod Ready - esperar recuperação HTTP real
-                        
-    #             elif component.component_type in ["node", "control_plane"]:
-    #                 # Para nodes, PRIMEIRO verificar se todas as aplicações estão funcionando (curl/HTTP)
-    #                 # Verificar se todas as aplicações definidas nos critérios estão funcionando
-    #                 all_apps_healthy = True
-    #                 apps_status = []
-                    
-    #                 for app_name in self.availability_criteria.keys():
-    #                     health_result = self.health_checker.check_application_health(app_name, verbose=False)
-    #                     is_healthy = health_result.get('healthy', False)
-    #                     url_info = health_result.get('url_type', 'unknown')
-    #                     apps_status.append(f"{app_name}: {'✅' if is_healthy else '❌'} ({url_info})")
-                        
-    #                     if not is_healthy:
-    #                         all_apps_healthy = False
-                    
-    #                 if all_apps_healthy:
-    #                     # Todas as apps estão funcionando via HTTP - recuperação confirmada!
-    #                     recovery_time = time.time() - start_time
-    #                     print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (todas apps funcionando via HTTP)")
-    #                     component.current_status = 'healthy'
-                        
-    #                     return recovery_time
-    #                 else:
-    #                     # Apps ainda não funcionando, verificar node status como informação adicional
-    #                     node_ready = self.health_checker.is_node_ready(component.name)
-    #                     node_status = "Ready" if node_ready else "NotReady"
-                        
-    #                     print(f"  ⏳ Apps ainda recuperando (node: {node_status}): {', '.join(apps_status)}")
-                        
-    #                     # FALLBACK: Se todas as apps falharam no HTTP mas node está Ready e tempo > 10min, aceitar
-    #                     if node_ready and (time.time() - start_time) > 600:  # 10 minutos
-    #                         print(f"  ⚠️ FALLBACK: Node Ready há >10min mas apps não respondem HTTP")
-    #                         recovery_time = time.time() - start_time
-    #                         print(f"  ✅ {component.name} recuperado em {recovery_time:.1f}s (fallback: node Ready)")
-    #                         component.current_status = 'healthy'
-                            
-    #                         return recovery_time
-                
-    #             time.sleep(check_interval)
-                
-    #         except Exception as e:
-    #             print(f"  ⚠️ Erro verificando recuperação: {e}")
-    #             time.sleep(check_interval)
-    
     def check_system_availability(self) -> bool:
         """
         Verifica se o sistema está disponível baseado nos critérios configurados.
@@ -1806,10 +1734,18 @@ class AvailabilitySimulator:
                     # E já adicionou o MTTR configurado ao total_downtime do componente
                     # Usar o tempo correto que foi calculado (MTTR configurado)
                     recovery_time = getattr(self, '_last_shutdown_recovery_time', 0.0)
+                    print(f"  ⏱️ VALIDAÇÃO - Tempo de recuperação (MTTR): {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
+                elif failure_method == "shutdown_control_plane":
+                    # O _handle_shutdown_control_plane já fez todo o processo incluindo health check
+                    # E já adicionou o MTTR configurado ao total_downtime do componente
+                    # Usar o tempo correto que foi calculado (MTTR configurado)
+                    recovery_time = getattr(self, '_last_shutdown_recovery_time', 0.0)
+                    print(f"  ⏱️ VALIDAÇÃO - Tempo de recuperação (MTTR) Control Plane: {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
                 else:
                     # Para outras falhas, fazer verificação normal
                     _, recovery_time = self.health_checker.wait_for_pods_recovery()
                     next_event.component.total_downtime += recovery_time
+                    print(f"  ⏱️ Tempo de recuperação (falha normal): {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
                 
                 # Aguardar 1 minuto real (delay fixo) - DEPOIS da recuperação
                 print(f"⏸️ Aguardando {self.real_delay_between_failures}s (delay entre falhas)...")
@@ -2754,3 +2690,125 @@ class AvailabilitySimulator:
         discovered_urls = self._discover_services_urls()
         if discovered_urls:
             print(f"✅ URLs descobertas para {len(discovered_urls)} serviços")
+    
+    def _handle_shutdown_control_plane(self, node_name: str) -> tuple[bool, float]:
+        """
+        Lógica especial para shutdown de control plane.
+        
+        PROCESSO CORRETO:
+        1. Desliga o control plane
+        2. Aguarda delay configurado do teste (campo "delay", não MTTR)
+        3. Religa o control plane automaticamente (self-healing)
+        4. Verifica com health checker quando aplicações voltaram
+        
+        Returns:
+            Tuple com (sucesso, tempo_recuperacao_segundos)
+        """
+        try:
+            import time
+            
+            print(f"  🔌 Desligando control plane: {node_name}")
+            
+            # 1. Desligar o control plane usando node_injector
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                shutdown_success, shutdown_command = self.aws_injector.shutdown_control_plane(node_name)
+            else:
+                shutdown_success, shutdown_command = self.node_injector.shutdown_control_plane(node_name)
+                
+            if not shutdown_success:
+                print(f"  ❌ Falha ao desligar control plane {node_name}")
+                return False, 0.0
+            
+            # 2. Obter delay configurado do teste (NÃO o MTTR)
+            delay_seconds = 10  # Default 
+            mttr_hours = 0.025  # MTTR padrão para contabilização (~1.5 minutos)
+            
+            if hasattr(self, '_config_simples') and self._config_simples:
+                # O _config_simples é uma instância da classe ConfigSimples, não um dict
+                if hasattr(self._config_simples, 'delay'):
+                    delay_seconds = self._config_simples.delay
+                    print(f"  📊 Delay do teste configurado: {delay_seconds}s")
+                
+                # Obter MTTR para contabilização final
+                if hasattr(self._config_simples, 'get_mttr'):
+                    try:
+                        mttr_hours = self._config_simples.get_mttr(node_name)
+                        print(f"  📊 MTTR configurado para contabilização: {mttr_hours:.4f}h ({mttr_hours*3600:.1f}s)")
+                    except Exception as e:
+                        print(f"  ⚠️ Erro ao obter MTTR configurado, usando padrão: {e}")
+                else:
+                    print(f"  ⚠️ Config simples sem método get_mttr, usando MTTR padrão")
+            else:
+                print(f"  ⚠️ Config não disponível, usando delay padrão: {delay_seconds}s")
+            
+            # 3. Aguardar delay configurado do teste (NÃO MTTR)
+            print(f"  ⏱️ Aguardando delay configurado do teste: {delay_seconds}s...")
+            time.sleep(delay_seconds)
+            
+            # 4. Religar o control plane automaticamente
+            print(f"  🔄 Self-healing: Religando control plane: {node_name}")
+            if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                startup_success, startup_command = self.aws_injector.start_control_plane(node_name)
+            else:
+                startup_success, startup_command = self.node_injector.start_control_plane(node_name)
+            
+            if not startup_success:
+                print(f"  ❌ Falha ao religar control plane {node_name}")
+                return False, 0.0
+            
+            print(f"  ✅ Control plane {node_name} religado com sucesso")
+            
+            # 5. CORREÇÃO: Aguardar aplicações ficarem ativas com health checker
+            print(f"  ⚕️ Aguardando aplicações ficarem ativas com health checker...")
+            health_check_start = time.time()
+            
+            # Usar health checker para verificação real (mas não contabilizar o tempo)
+            if hasattr(self, 'health_checker') and self.health_checker:
+                # Descobrir aplicações se não estão em cache
+                discovered_apps = None
+                if hasattr(self, 'availability_criteria'):
+                    discovered_apps = list(self.availability_criteria.keys())
+                
+                apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
+                    timeout=180,  # 3 minutos timeout
+                    discovered_apps=discovered_apps
+                )
+                
+                if apps_recovered:
+                    print(f"  ✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
+                    # CORREÇÃO: NÃO somar tempo real, usar apenas MTTR configurado
+                    mttr_seconds = mttr_hours * 3600
+                    print(f"  📊 Usando apenas MTTR configurado: {mttr_seconds:.1f}s (não contabilizando tempo real de {health_check_time:.1f}s)")
+                    
+                    # Armazenar o MTTR configurado no componente para uso posterior
+                    component = next((c for c in self.components if c.name == f"control_plane-{node_name}"), None)
+                    if component:
+                        component.total_downtime += mttr_seconds
+                    
+                    return True, mttr_seconds
+                else:
+                    print(f"  ⚠️ Aplicações não ficaram ativas no timeout (180s)")
+                    # Mesmo assim, considera recuperado com MTTR configurado
+                    print(f"  📊 Usando MTTR configurado mesmo com timeout: {mttr_hours*3600:.1f}s")
+                    
+                    # Armazenar o MTTR configurado mesmo com timeout
+                    component = next((c for c in self.components if c.name == f"control_plane-{node_name}"), None)
+                    if component:
+                        component.total_downtime += mttr_hours * 3600
+                    
+                    return True, mttr_hours * 3600
+            else:
+                print(f"  ⚠️ Health checker não disponível, retornando MTTR configurado")
+                mttr_seconds = mttr_hours * 3600
+                
+                component = next((c for c in self.components if c.name == f"control_plane-{node_name}"), None)
+                if component:
+                    component.total_downtime += mttr_seconds
+                
+                return True, mttr_seconds
+                
+        except Exception as e:
+            print(f"  ❌ Erro durante shutdown/recovery de control plane {node_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, 0.0
