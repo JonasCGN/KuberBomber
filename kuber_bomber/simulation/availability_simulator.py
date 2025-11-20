@@ -74,7 +74,7 @@ class Component:
             elif self.mttf_key == "control_plane" or (self.component_type == "control_plane" and not self.mttf_key):
                 self.available_failure_methods = [
                     "shutdown_control_plane",
-                    "kill_control_plane_processes",
+                    # "kill_control_plane_processes",
                 ]
             elif self.mttf_key == "cp_apiserver":
                 self.available_failure_methods = [
@@ -169,18 +169,16 @@ class AvailabilitySimulator:
         # Injetores de falha - usar AWS quando estiver em modo AWS
         if self.is_aws_mode and aws_config:
             
-            print("🔧 Inicializando injetores AWS...")
+            print("🔧 Inicializando AWS injector com descoberta automática...")
             # Usar aws_config passado como parâmetro, não recarregar
-            # aws_config já foi carregado pelo CLI
-            
-            ssh_host = aws_config.get('ssh_host', '')
+            # aws_config já foi carregado pelo CLI com discovery automático
             
             self.aws_injector = AWSFailureInjector(
-                ssh_host=ssh_host,
+                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem'),
                 ssh_user=aws_config.get('ssh_user', 'ubuntu'),
-                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem')
+                aws_config=aws_config  # Passar config completo para discovery
             )
-            print(f"✅ AWS injector configurado para {ssh_host}")
+            print("✅ AWS injector configurado com descoberta automática de control plane")
         elif self.is_aws_mode:
             # Se is_aws_mode=True mas aws_config=None, tentar carregar
             print("🔧 Inicializando injetores AWS...")
@@ -189,14 +187,12 @@ class AvailabilitySimulator:
                 print("❌ Falha ao carregar configuração AWS. Abortando inicialização do simulador.")
                 sys.exit(1)
             
-            ssh_host = aws_config.get('ssh_host', '')
-            
             self.aws_injector = AWSFailureInjector(
-                ssh_host=ssh_host,
+                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem'),
                 ssh_user=aws_config.get('ssh_user', 'ubuntu'),
-                ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem')
+                aws_config=aws_config  # Passar config completo para discovery
             )
-            print(f"✅ AWS injector configurado para {ssh_host}")
+            print("✅ AWS injector configurado com descoberta automática de control plane")
         else:
             print("🔧 Inicializando injetores locais...")
             self.aws_injector = None
@@ -849,11 +845,12 @@ class AvailabilitySimulator:
                 statistics_file = os.path.join(iteration_dir, 'statistics.csv')
                 
                 # Calcular disponibilidade atual
-                current_availability = (total_available_time / current_time * 100) if current_time > 0 else 100.0
                 
                 # Calcular tempo médio de recuperação (se houver eventos)
                 mean_recovery_time = 0.0
                 total_downtime = current_time - total_available_time
+                
+                current_availability = total_available_time / current_time
                 
                 # Dados das estatísticas seguindo o padrão existente
                 statistics_data = [
@@ -873,7 +870,7 @@ class AvailabilitySimulator:
                     writer.writerow(['metric', 'value'])  # Header
                     writer.writerows(statistics_data)
                     
-                print(f"📊 Estatísticas atualizadas: {events_count} eventos, {current_availability:.1f}% disponibilidade")
+                print(f"📊 Estatísticas atualizadas: {events_count} eventos, {current_availability:.1f}% disponibilidade, tempo total:{current_time}")
                     
         except Exception as e:
             print(f"⚠️ Erro ao salvar progresso da iteração: {e}")
@@ -2660,7 +2657,7 @@ class AvailabilitySimulator:
         Args:
             aws_config: Configuração AWS
         """
-        print(f"🔄 Reconfigurando injetores para AWS: {aws_config.get('ssh_host', 'N/A')}")
+        print(f"🔄 Reconfigurando injetores para AWS com descoberta automática")
         
         # Reconfigurar kubectl executor
         self.kubectl = get_kubectl_executor(aws_config)
@@ -2669,7 +2666,6 @@ class AvailabilitySimulator:
         self.health_checker = HealthChecker(aws_config=aws_config)
         
         # Extrair parâmetros AWS
-        ssh_host = aws_config.get('ssh_host', '')
         ssh_key = aws_config.get('ssh_key', '~/.ssh/vockey.pem')
         ssh_user = aws_config.get('ssh_user', 'ubuntu')
         
@@ -2681,8 +2677,8 @@ class AvailabilitySimulator:
         self.cp_injector = ControlPlaneInjector()  # Usar configuração padrão
         self.aws_injector = AWSFailureInjector(
             ssh_key=ssh_key,
-            ssh_host=ssh_host, 
-            ssh_user=ssh_user
+            ssh_user=ssh_user,
+            aws_config=aws_config  # Passar config completo para discovery
         )
         
         # Descobrir URLs dos serviços após configuração AWS

@@ -1,5 +1,27 @@
 # 🎯 Testes de Confiabilidade - Todos os Componentes Kubernetes
 
+## 🆕 NOVIDADE: Descoberta Automática de Control Plane
+
+O KuberBomber agora possui **descoberta automática do IP do control plane** para ambiente AWS!
+
+### ✨ Principais Vantagens:
+- 🚀 **Zero configuração manual**: IP descoberto automaticamente via AWS CLI
+- 🔄 **Resistente a shutdowns**: Redescobre IP após restart do control plane
+- 🛡️ **Failover automático**: Funciona mesmo quando control plane muda de IP  
+- ⚡ **Setup simplificado**: Apenas 2 campos no aws_config.json
+
+### 📝 Nova Configuração AWS:
+```json
+{
+  "ssh_key": "~/.ssh/vockey.pem",
+  "ssh_user": "ubuntu"
+}
+```
+
+**🎉 Não precisa mais configurar `ssh_host` - é descoberto automaticamente!**
+
+---
+
 ## 📋 Visão Geral
 
 Este framework modular permite testar a confiabilidade de **TODOS** os componentes de um cluster Kubernetes (Kind), incluindo:

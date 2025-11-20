@@ -99,18 +99,36 @@ class ConfigSimples:
     @classmethod
     def load_aws_config(cls, aws_config_file: str = f"{os.getcwd}/kuber_bomber/configs/aws_config.json") -> Dict[str, Any]:
         """
-        Carrega configuração AWS de arquivo separado.
+        Carrega configuração AWS de arquivo separado com descoberta automática do control plane.
         
         Args:
             aws_config_file: Caminho para arquivo AWS
             
         Returns:
-            Configuração AWS
+            Configuração AWS com ssh_host descoberto automaticamente
         """
         try:
             if os.path.exists(aws_config_file):
                 with open(aws_config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                
+                # Se não tem ssh_host, descobrir automaticamente
+                if 'ssh_host' not in config or not config.get('ssh_host'):
+                    print("🔍 ssh_host não encontrado, descobrindo automaticamente...")
+                    
+                    # Importar discovery
+                    from kuber_bomber.utils.control_plane_discovery import ControlPlaneDiscovery
+                    
+                    discovery = ControlPlaneDiscovery(config)
+                    control_plane_ip = discovery.discover_control_plane_ip()
+                    
+                    if control_plane_ip:
+                        config['ssh_host'] = control_plane_ip
+                        print(f"✅ Control plane descoberto: {control_plane_ip}")
+                    else:
+                        print("❌ Não foi possível descobrir o control plane")
+                        
+                return config
         except Exception as e:
             print(f"⚠️ Erro ao carregar AWS config: {e}")
         

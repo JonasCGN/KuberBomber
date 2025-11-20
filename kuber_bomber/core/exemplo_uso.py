@@ -19,7 +19,11 @@ import json
 from typing import Dict, List, Optional, Tuple
 
 # Adicionar path para imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+kuber_bomber_dir = os.path.dirname(current_dir)
+project_dir = os.path.dirname(kuber_bomber_dir)
+sys.path.insert(0, kuber_bomber_dir)
+sys.path.insert(0, project_dir)
 
 from kuber_bomber.core.reliability_tester import ReliabilityTester
 from kuber_bomber.core.config_simples import ConfigSimples, ConfigPresets
@@ -69,10 +73,9 @@ class ExemploUso:
         """
         Obtém a configuração da infraestrutura via descoberta automática.
         
-        Este método:
-        1. Descobre automaticamente todos os componentes do cluster
-        2. Define MTTF padrão se não tiver análise MTTR
-        3. Opcionalmente executa análise MTTR completa (2 iterações por componente)
+        Este método usa os comandos make que já implementam toda a lógica:
+        - make generate_config: Descoberta básica com MTTF padrão
+        - make generate_config_all: Descoberta + análise MTTR completa (executa testes reais)
         
         Args:
             iterations: Número de iterações para simulação (padrão: 5)
@@ -80,79 +83,83 @@ class ExemploUso:
             
         Returns:
             ConfigSimples com configuração completa ou None se falhar
-            
-        Exemplo:
-            >>> exemplo = ExemploUso()
-            >>> config = exemplo.get_config(iterations=10, run_mttr_analysis=True)
-            >>> print(f"✅ Configuração carregada com {len(config.components)} componentes")
         """
         print("\n📋 === ETAPA 1: OBTER CONFIGURAÇÃO ===\n")
         
         try:
-            # Carregar config AWS se necessário
-            aws_config = None
-            if self.use_aws:
-                # arquivo aws_config.json deve estar em kuber_bomber/configs/
-                path_aws_config = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "configs",
-                    "aws_config.json"
-                )
-                
-                if os.path.exists(path_aws_config):
-                    with open(path_aws_config, 'r') as f:
-                        aws_config_data = json.load(f)
-                    aws_config = {
-                        'ssh_host': aws_config_data.get('ssh_host'),
-                        'ssh_key': aws_config_data.get('ssh_key'),
-                        'ssh_user': aws_config_data.get('ssh_user')
-                    }
-                    print(f"☁️ AWS config carregado: {aws_config['ssh_user']}@{aws_config['ssh_host']}")
-                else:
-                    print(f"❌ aws_config.json não encontrado em {path_aws_config}")
-                    print("   Configure o arquivo aws_config.json e tente novamente")
-                    return None
+            import subprocess
+            import os
             
-            # Descobrir infraestrutura
-            print("🔍 Descobrindo infraestrutura...")
-            discovery = InfrastructureDiscovery(use_aws=self.use_aws, aws_config=aws_config)
-            config, config_filepath = discovery.discover_and_generate_config(iterations=iterations)
-            
-            # Executar análise MTTR se solicitado
+            # Preparar comando make
             if run_mttr_analysis:
-                print("\n🧪 Executando análise MTTR completa...")
-                print("   ⏰ Esto pode levar 10-20 minutos...")
+                print("🧪 Executando descoberta + análise MTTR completa...")
+                print("   📊 Isso irá executar testes reais para medir tempos de recuperação")
+                print("   ⏰ Tempo estimado: 10-20 minutos dependendo do cluster")
                 
-                try:
-                    analyzer = MTTRAnalyzer(
-                        use_aws=self.use_aws,
-                        aws_config=aws_config,
-                        iterations=2  # 2 iterações por componente
-                    )
-                    config = analyzer.run_complete_analysis(config)
+                if self.use_aws:
+                    make_target = 'generate_config_all_aws'
+                else:
+                    make_target = 'generate_config_all'
+            else:
+                print("🔍 Executando descoberta básica com MTTF padrão...")
+                
+                if self.use_aws:
+                    make_target = 'generate_config_aws'
+                else:
+                    make_target = 'generate_config'
+            
+            print(f"🚀 Executando: make {make_target}")
+            print()
+            
+            # Executar comando make
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+            result = subprocess.run(
+                ['make', make_target],
+                cwd=project_root,
+                text=True,
+                timeout=1800  # 30 minutos de timeout
+            )
+            
+            if result.returncode == 0:
+                print("\n✅ Comando make executado com sucesso!")
+                
+                # Carregar configuração gerada
+                config_file = os.path.join(project_root, "kuber_bomber", "configs", "config_simples_used.json")
+                
+                if os.path.exists(config_file):
+                    print(f"📂 Carregando configuração de: {config_file}")
                     
-                    # Salvar config atualizado
-                    with open(config_filepath, 'w') as f:
-                        if hasattr(config, 'to_dict') and callable(config.to_dict):
-                            json.dump(config.to_dict(), f, indent=2)
-                        elif isinstance(config, dict):
-                            json.dump(config, f, indent=2)
-                        else:
-                            json.dump(vars(config) if hasattr(config, '__dict__') else str(config), f, indent=2)
+                    with open(config_file, 'r') as f:
+                        config_data = json.load(f)
                     
-                    print("✅ Análise MTTR completa!")
-                except Exception as e:
-                    print(f"❌ Erro na análise MTTR: {e}")
-                    print("   Continuando com MTTF padrão...")
-            
-            self.config = config
-            print(f"\n✅ Configuração obtida com sucesso!")
-            print(f"   📁 Arquivo: {config_filepath}")
-            
-            return config
-            
+                    # Criar objeto ConfigSimples
+                    from kuber_bomber.core.config_simples import ConfigSimples
+                    config = ConfigSimples(config_data=config_data)
+                    
+                    # Configurar AWS se necessário
+                    if self.use_aws:
+                        config.configure_aws()
+                    
+                    self.config = config
+                    
+                    print("✅ Configuração carregada com sucesso!")
+                    if run_mttr_analysis:
+                        print("📊 Análise MTTR completa executada - tempos reais medidos")
+                    
+                    return config
+                else:
+                    print(f"❌ Arquivo de configuração não encontrado: {config_file}")
+                    return None
+            else:
+                print(f"❌ Comando make falhou com código: {result.returncode}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            print("❌ Timeout - processo demorou mais que 30 minutos")
+            return None
         except Exception as e:
-            print(f"❌ Erro ao obter configuração: {e}")
+            print(f"❌ Erro ao executar comando: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -256,60 +263,78 @@ class ExemploUso:
     
     def check_availability(self) -> Optional[Dict]:
         """
-        Verifica a disponibilidade atual do sistema.
+        Executa simulação de disponibilidade usando configuração existente.
         
-        Este método:
-        1. Verifica status dos pods
-        2. Testa conectividade das aplicações
-        3. Retorna métricas de disponibilidade
+        Este método usa o comando make run_simulation_aws/run_simulation que executa
+        a simulação completa de disponibilidade baseada no config_simples_used.json.
         
         Returns:
-            Dicionário com métricas de disponibilidade ou None se falhar
-            
-        Exemplo:
-            >>> exemplo = ExemploUso()
-            >>> disponibilidade = exemplo.check_availability()
-            >>> if disponibilidade:
-            ...     print(f"✅ Disponibilidade: {disponibilidade['percentage']:.1f}%")
+            Dicionário com resultados da simulação ou None se falhar
         """
-        print("\n🔍 === ETAPA 3: VERIFICAR DISPONIBILIDADE ===\n")
+        print("\n🔍 === ETAPA 3: EXECUTAR SIMULAÇÃO DE DISPONIBILIDADE ===\n")
         
         try:
-            if not self.tester:
-                print("⚠️ Testador não inicializado, criando novo...")
-                aws_config = None
-                if self.use_aws and self.config:
-                    try:
-                        aws_config = self.config.get_aws_config()
-                    except:
-                        pass
-                self.tester = ReliabilityTester(aws_config=aws_config)
+            import subprocess
+            import os
             
-            # Executar verificação inicial do sistema
-            print("📋 Verificando status do sistema...")
-            healthy_count, health_status, discovered_apps = self.tester.initial_system_check()
+            # Verificar se há configuração
+            config_file = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "kuber_bomber", "configs", "config_simples_used.json"
+            )
             
-            self.discovered_apps = discovered_apps
+            if not os.path.exists(config_file):
+                print("❌ Configuração não encontrada!")
+                print("� Execute primeiro 'Get_Config' ou 'get_config_all' para gerar a configuração")
+                return None
             
-            # Calcular disponibilidade
-            total_services = len(health_status) if health_status else 0
-            availability = (healthy_count / total_services * 100) if total_services > 0 else 0
+            print("📊 Executando simulação de disponibilidade...")
+            print("   📋 Usando configuração existente")
+            print("   ⏰ Aguarde enquanto a simulação é executada...")
             
-            result = {
-                'percentage': availability,
-                'healthy_count': healthy_count,
-                'total_services': total_services,
-                'services': health_status or {}
-            }
+            # Escolher comando baseado no contexto
+            if self.use_aws:
+                make_target = 'run_simulation_aws'
+                print("☁️ Modo: Simulação AWS")
+            else:
+                make_target = 'run_simulation'
+                print("🏠 Modo: Simulação Local")
             
-            print(f"\n✅ Verificação concluída!")
-            print(f"   🟢 Serviços saudáveis: {healthy_count}/{total_services}")
-            print(f"   📊 Disponibilidade: {availability:.1f}%")
+            print(f"🚀 Executando: make {make_target}")
+            print()
             
-            return result
+            # Executar comando make
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
+            result = subprocess.run(
+                ['make', make_target],
+                cwd=project_root,
+                text=True,
+                timeout=1800  # 30 minutos de timeout
+            )
+            
+            if result.returncode == 0:
+                print("\n✅ Simulação de disponibilidade executada com sucesso!")
+                print("📊 Resultados:")
+                print("   📁 Verifique os arquivos CSV gerados na pasta reports/")
+                print("   📈 Métricas de disponibilidade calculadas")
+                
+                # Retornar resultado básico
+                return {
+                    'simulation_completed': True,
+                    'command': f'make {make_target}',
+                    'reports_location': 'reports/',
+                    'status': 'success'
+                }
+            else:
+                print(f"❌ Simulação falhou com código: {result.returncode}")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            print("❌ Timeout - simulação demorou mais que 30 minutos")
+            return None
         except Exception as e:
-            print(f"❌ Erro ao verificar disponibilidade: {e}")
+            print(f"❌ Erro ao executar simulação: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -383,25 +408,86 @@ def main():
     print("="*60)
     print()
     
-    # Menu interativo
+    # Detectar contexto de execução
     use_aws = False
-    try:
-        modo = input("Modo de execução (1=Local/Kind, 2=AWS): ").strip()
-        use_aws = modo == '2'
-    except:
-        pass
+    print("🔍 CONFIGURAÇÃO DO AMBIENTE")
+    print("-" * 60)
+    print("Em qual contexto você está executando?")
+    print()
+    print("1. Cluster Local (minikube, kind, k3s, etc.)")
+    print("2. AWS EKS (cluster na nuvem)")
+    print()
+    
+    while True:
+        try:
+            modo = input("Escolha o contexto (1 ou 2): ").strip()
+            if modo == '1':
+                use_aws = False
+                print("✅ Contexto configurado: Cluster Local")
+                break
+            elif modo == '2':
+                use_aws = True
+                print("✅ Contexto configurado: AWS EKS")
+                print("   📋 Certifique-se de que aws_config.json está configurado")
+                break
+            else:
+                print("❌ Opção inválida. Digite 1 ou 2.")
+        except KeyboardInterrupt:
+            print("\n❌ Interrompido pelo usuário")
+            return
+        except:
+            print("❌ Erro na entrada. Digite 1 ou 2.")
+    
+    print()
     
     # Criar exemplo
     exemplo = ExemploUso(use_aws=use_aws)
+    
+    # Verificar conectividade do contexto escolhido
+    print("🔍 Verificando conectividade...")
+    if use_aws:
+        # Verificar se aws_config.json existe
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "configs",
+            "aws_config.json"
+        )
+        if not os.path.exists(config_path):
+            print(f"❌ ERRO: aws_config.json não encontrado em {config_path}")
+            print("   Configure o arquivo e tente novamente.")
+            return
+        print("✅ aws_config.json encontrado")
+    else:
+        # Verificar se kubectl está funcionando
+        import subprocess
+        try:
+            result = subprocess.run(['kubectl', 'cluster-info'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print("✅ Cluster local conectado")
+            else:
+                print("⚠️ ATENÇÃO: Problema de conectividade com cluster local")
+                print("   Certifique-se de que o cluster está rodando (minikube start, kind create cluster, etc.)")
+                continuar = input("Continuar mesmo assim? (s/N): ").lower().strip()
+                if continuar not in ['s', 'sim', 'y', 'yes']:
+                    print("Operação cancelada.")
+                    return
+        except Exception as e:
+            print("⚠️ ATENÇÃO: Não foi possível verificar conectividade do cluster")
+            print(f"   Erro: {e}")
+            continuar = input("Continuar mesmo assim? (s/N): ").lower().strip()
+            if continuar not in ['s', 'sim', 'y', 'yes']:
+                print("Operação cancelada.")
+                return
     
     # Menu de operações
     while True:
         print("\n" + "="*60)
         print("MENU PRINCIPAL")
         print("="*60)
-        print("1. Obter configuração (descoberta automática)")
-        print("2. Verificar disponibilidade")
-        print("3. Executar teste de confiabilidade")
+        print("1. Get_Config")
+        print("2. Teste de disponibilidade")
+        print("3. get_config_all")
         print("4. Executar fluxo completo (recomendado)")
         print("0. Sair")
         print()
@@ -410,15 +496,11 @@ def main():
             opcao = input("Escolha uma opção: ").strip()
             
             if opcao == '1':
-                exemplo.get_config(run_mttr_analysis=True)
+                exemplo.get_config(run_mttr_analysis=False)
             elif opcao == '2':
                 exemplo.check_availability()
             elif opcao == '3':
-                exemplo.run_test(
-                    component_type='control_plane',
-                    failure_method='shutdown_control_plane',
-                    iterations=5
-                )
+                exemplo.get_config(run_mttr_analysis=True)
             elif opcao == '4':
                 exemplo.executar_fluxo_completo()
             elif opcao == '0':

@@ -1,0 +1,12 @@
+Fazer com que o calculo do csv seja altamente preciso e com ate 5 casas decimais
+
+- Fazer metodo shutdown control-plane - CERTO
+
+3 - 5 Interações
+
+
+Criar um README configuracoes inicias e como usar e valores padrao caso nao ache
+
+-> Chama get-config -> Fazer o teste(get-config-all)(Pegar os mttrs) -> get de disponibilidade
+
+-> Criar uma classe exemplo (Vai ter so os metodos acima)

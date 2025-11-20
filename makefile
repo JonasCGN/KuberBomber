@@ -66,7 +66,9 @@ run_all_failures_aws:
 # 	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method shutdown_worker_node --target ip-10-0-0-241 --iterations 3 --interval 10 --aws
 # 	@echo ""
 # 	@echo "🎛️  ===== TESTES DE CONTROL PLANE AWS ====="
-	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
+# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
+# 	@echo ""
+	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method shutdown_control_plane --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 # 	@echo ""
@@ -78,40 +80,6 @@ run_all_failures_aws:
 # 	@echo ""
 # 	@echo "✅ Suite completa de testes AWS finalizada!"
 # 	@echo "📁 Resultados salvos em: testes/2025/11/04/component/"
-
-# 🧪 ===== TESTES DO SHUTDOWN WORKER NODE ===== 
-
-# Teste shutdown_worker_node via ReliabilityTester (linha de comando)
-test_shutdown_reliability_aws:
-	@echo "🧪 ===== TESTE SHUTDOWN WORKER NODE - RELIABILITY TESTER AWS ====="
-	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method shutdown_worker_node --target ip-10-0-0-241 --iterations 3 --interval 10 --aws
-	@echo ""
-	@echo "✅ Teste shutdown_worker_node (ReliabilityTester) finalizado!"
-
-# Teste shutdown_worker_node via ReliabilityTester (local)
-test_shutdown_reliability_local:
-	@echo "🧪 ===== TESTE SHUTDOWN WORKER NODE - RELIABILITY TESTER LOCAL ====="
-	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method shutdown_worker_node --target local-k8s-worker --iterations 3 --interval 10
-	@echo ""
-	@echo "✅ Teste shutdown_worker_node (ReliabilityTester) finalizado!"
-
-# Script de teste unitário do ReliabilityTester
-test_shutdown_script_reliability:
-	@echo "🧪 ===== SCRIPT TESTE - RELIABILITY TESTER ====="
-	cd ./ && python3 test_shutdown_reliability.py
-	@echo ""
-
-# Script de teste unitário do AvailabilitySimulator  
-test_shutdown_script_simulator:
-	@echo "🧪 ===== SCRIPT TESTE - AVAILABILITY SIMULATOR ====="
-	cd ./ && python3 test_shutdown_simulator.py
-	@echo ""
-
-# Script de teste combinado (ambos frameworks)
-test_shutdown_script_combined:
-	@echo "🧪 ===== SCRIPT TESTE COMBINADO - AMBOS FRAMEWORKS ====="
-	cd ./ && python3 test_shutdown_combined.py
-	@echo ""
 
 
 run_graficos:

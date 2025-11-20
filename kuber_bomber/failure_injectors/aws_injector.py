@@ -2,7 +2,8 @@
 AWS Failure Injector
 ===================
 
-Injeta falhas em ambientes AWS via SSH usando AWS CLI para descoberta automática de IPs.
+Injeta falhas em ambientes AWS via SSH usando descoberta automática de IPs.
+Não depende mais de ssh_host fixo no aws_config.json.
 """
 
 import subprocess
@@ -15,70 +16,62 @@ class AWSFailureInjector:
     Injetor de falhas específico para ambiente AWS via SSH com descoberta automática de IPs.
     """
     
-    def __init__(self, ssh_key: str, ssh_host: str, ssh_user: str = "ubuntu"):
-        self.ssh_key = ssh_key
-        self.ssh_host = ssh_host
-        self.ssh_user = ssh_user
-        self.ssh_connection = f"{ssh_user}@{ssh_host}"
-        self._instance_cache = {}  # Cache para IPs das instâncias
+    def __init__(self, ssh_key: str, ssh_user: str = "ubuntu", aws_config: Optional[Dict] = None):
+        """
+        Inicializa o injector com descoberta automática.
         
+        Args:
+            ssh_key: Caminho para chave SSH
+            ssh_user: Usuário SSH  
+            aws_config: Configuração AWS completa (opcional, para discovery)
+        """
+        self.ssh_key = ssh_key
+        self.ssh_user = ssh_user
+        self.aws_config = aws_config or {}
+        
+        # Integrar com control plane discovery
+        from ..utils.control_plane_discovery import ControlPlaneDiscovery
+        self.discovery = ControlPlaneDiscovery(self.aws_config)
+        
+        # SSH host será descoberto dinamicamente
+        self.ssh_host = None
+        self.ssh_connection = None
+        
+    def _ensure_control_plane_connection(self) -> bool:
+        """
+        Garante que temos conexão com o control plane (descoberta automática).
+        
+        Returns:
+            True se conexão está disponível
+        """
+        # Se já temos conexão válida, reutilizar
+        if self.ssh_host and self.ssh_connection:
+            return True
+        
+        # Descobrir control plane automaticamente
+        control_plane_ip = self.discovery.discover_control_plane_ip()
+        
+        if control_plane_ip:
+            self.ssh_host = control_plane_ip
+            self.ssh_connection = f"{self.ssh_user}@{control_plane_ip}"
+            return True
+        else:
+            print("❌ Não foi possível descobrir o control plane")
+            return False
+    
     def _get_aws_instances(self) -> Dict[str, Dict]:
         """
-        Obtém informações das instâncias AWS via AWS CLI.
+        Obtém informações das instâncias AWS via descoberta.
         """
-        if self._instance_cache:
-            return self._instance_cache
-            
-        try:
-            cmd = [
-                'aws', 'ec2', 'describe-instances',
-                '--query', 
-                'Reservations[].Instances[].{ID:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,PrivateIP:PrivateIpAddress,PublicIP:PublicIpAddress,State:State.Name}',
-                '--output', 'json'
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                instances_data = json.loads(result.stdout)
-                instances = {}
-                
-                for instance in instances_data:
-                    if instance.get('State') == 'running' and instance.get('Name'):
-                        name = instance['Name']
-                        # Mapear nomes para formato de node do Kubernetes
-                        if 'WN' in name or 'worker' in name.lower():
-                            # WN0 -> ip-10-0-0-98, WN1 -> ip-10-0-0-241
-                            private_ip = instance['PrivateIP']
-                            node_name = f"ip-{private_ip.replace('.', '-')}"
-                            instances[node_name] = instance
-                        elif 'control' in name.lower() or 'master' in name.lower():
-                            private_ip = instance['PrivateIP']
-                            node_name = f"ip-{private_ip.replace('.', '-')}"
-                            instances[node_name] = instance
-                            
-                self._instance_cache = instances
-                print(f"🔍 Descobertas {len(instances)} instâncias AWS:")
-                for node_name, info in instances.items():
-                    print(f"  • {node_name}: {info['Name']} ({info['PublicIP']})")
-                    
-                return instances
-            else:
-                print(f"❌ Erro ao executar AWS CLI: {result.stderr}")
-                return {}
-                
-        except Exception as e:
-            print(f"❌ Exceção ao obter instâncias AWS: {str(e)}")
-            return {}
+        return self.discovery.get_all_aws_instances()
     
     def _get_node_public_ip(self, node_name: str) -> str:
         """
-        Obtém o IP público de um node via AWS CLI.
+        Obtém o IP público de um node via descoberta.
         """
-        instances = self._get_aws_instances()
+        public_ip = self.discovery.get_node_public_ip(node_name)
         
-        if node_name in instances:
-            public_ip = instances[node_name]['PublicIP']
+        if public_ip:
             print(f"🌐 Node {node_name} -> IP público: {public_ip}")
             return public_ip
         else:
@@ -131,9 +124,12 @@ class AWSFailureInjector:
     
     def run_remote_command(self, command: str) -> subprocess.CompletedProcess:
         """
-        Executa comando genérico no control plane (mantido para compatibilidade).
+        Executa comando genérico no control plane com descoberta automática.
         """
-        print(f"🔄 Executando no control plane: {command}")
+        if not self._ensure_control_plane_connection():
+            raise Exception("Não foi possível estabelecer conexão com o control plane")
+            
+        print(f"🔄 Executando no control plane ({self.ssh_host}): {command}")
         ssh_cmd = [
             'ssh', '-i', self.ssh_key,
             '-o', 'StrictHostKeyChecking=no',
@@ -147,7 +143,7 @@ class AWSFailureInjector:
     
     def run_remote_kubectl(self, args: List[str]) -> subprocess.CompletedProcess:
         """
-        Executa kubectl no control plane.
+        Executa kubectl no control plane com descoberta automática.
         """
         kubectl_cmd = ['sudo', 'kubectl'] + args
         command = ' '.join(kubectl_cmd)
@@ -556,7 +552,7 @@ class AWSFailureInjector:
             print(f"✅ Comando de shutdown enviado para {node_name} (instância {instance_id})")
             
             # Aguardar a instância ficar stopped
-            if self._wait_for_instance_state(instance_id, 'stopped', timeout=60):
+            if self._wait_for_instance_state(instance_id, 'stopped', timeout=180):
                 print(f"✅ Control plane {node_name} foi desligado com sucesso")
                 return True, f"shutdown_control_plane {node_name}"
             else:
@@ -569,7 +565,7 @@ class AWSFailureInjector:
     
     def start_control_plane(self, node_name: str) -> Tuple[bool, str]:
         """
-        Liga o control plane desligado.
+        Liga o control plane desligado e atualiza descoberta automática.
         Self-healing automático após shutdown_control_plane.
         
         Args:
@@ -604,7 +600,21 @@ class AWSFailureInjector:
             # Aguardar a instância ficar running
             if self._wait_for_instance_state(instance_id, 'running', timeout=120):
                 print(f"✅ Control plane {node_name} foi ligado com sucesso")
-                return True, f"start_control_plane {node_name}"
+                
+                # IMPORTANTE: Limpar cache e redescobrir o novo IP
+                print("🔄 Redescobrir control plane com novo IP...")
+                self.discovery.refresh_cache()
+                
+                # Aguardar control plane ficar pronto para conexão SSH
+                if self.discovery.wait_for_control_plane_ready(timeout=180):
+                    print(f"✅ Control plane pronto para conexão SSH")
+                    # Atualizar nossa própria conexão
+                    self.ssh_host = None
+                    self.ssh_connection = None
+                    return True, f"start_control_plane {node_name}"
+                else:
+                    print(f"⚠️ Control plane ligado mas SSH não está pronto")
+                    return False, f"start_control_plane {node_name}"
             else:
                 print(f"⚠️ Control plane {node_name} não ficou running no tempo esperado")
                 return False, f"start_control_plane {node_name}"

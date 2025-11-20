@@ -38,13 +38,13 @@ class HealthChecker:
         self.is_aws_mode = aws_config is not None
 
         if self.is_aws_mode and aws_config:
-            # MODO AWS: Usar APENAS aws_injector
-            print("🔧 Inicializando APENAS AWS injector...")
+            # MODO AWS: Usar APENAS aws_injector com descoberta automática
+            print("🔧 Inicializando AWS injector com descoberta automática...")
             from ..failure_injectors.aws_injector import AWSFailureInjector
             self.aws_injector = AWSFailureInjector(
                 ssh_key=aws_config['ssh_key'],
-                ssh_host=aws_config['ssh_host'],
-                ssh_user=aws_config['ssh_user']
+                ssh_user=aws_config['ssh_user'],
+                aws_config=aws_config  # Passar config completo para discovery
             )
             print("✅ AWS injector configurado - injetores locais não serão usados")
         
@@ -758,7 +758,11 @@ class HealthChecker:
             
             ssh_key = self.aws_config['ssh_key']
             ssh_user = self.aws_config['ssh_user']
-            aws_injector = AWSFailureInjector(ssh_key, ssh_host, ssh_user)
+            aws_injector = AWSFailureInjector(
+                ssh_key=ssh_key,
+                ssh_user=ssh_user,
+                aws_config=self.aws_config  # Passar config completo para discovery
+            )
             
             # Executar curl no control plane via SSH usando aws_injector
             curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{local_url}'"
@@ -903,22 +907,36 @@ class HealthChecker:
             if verbose:
                 print(f"🌐 Verificando {service} via node IP: {node_url}")
             
-            # Executar curl no control plane via SSH usando IP do node
+            # Executar curl no control plane via SSH usando discovery automático
             curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{node_url}'"
             
-            ssh_key = self.aws_config['ssh_key']
-            ssh_user = self.aws_config['ssh_user'] 
-            ssh_host = self.aws_config['ssh_host']
-            
-            ssh_cmd = [
-                'ssh', '-i', ssh_key,
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'ConnectTimeout=10',
-                f"{ssh_user}@{ssh_host}",
-                curl_cmd
-            ]
-            
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+            # Usar aws_injector existente para executar comando
+            if hasattr(self, 'aws_injector') and self.aws_injector:
+                # Usar aws_injector para executar comando no control plane
+                result = self.aws_injector.run_remote_command(curl_cmd)
+            else:
+                # Fallback: descobrir control plane dinamicamente  
+                from ..utils.control_plane_discovery import ControlPlaneDiscovery
+                discovery = ControlPlaneDiscovery(self.aws_config)
+                control_plane_ip = discovery.discover_control_plane_ip()
+                
+                if not control_plane_ip:
+                    if verbose:
+                        print(f"❌ Não foi possível descobrir control plane")
+                    return self._check_aws_application_health_fallback(service, verbose)
+                
+                ssh_key = self.aws_config['ssh_key']
+                ssh_user = self.aws_config['ssh_user']
+                
+                ssh_cmd = [
+                    'ssh', '-i', ssh_key,
+                    '-o', 'StrictHostKeyChecking=no',
+                    '-o', 'ConnectTimeout=10',
+                    f"{ssh_user}@{control_plane_ip}",
+                    curl_cmd
+                ]
+                
+                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
             
             if result.returncode != 0:
                 err = result.stderr.strip() or 'SSH/curl failed'
@@ -972,7 +990,7 @@ class HealthChecker:
         Fallback para verificação AWS usando configuração hardcoded apenas para NodePorts conhecidos.
         """
         # OBRIGATÓRIO: usar aws_config.json - SEM configuração hardcoded!
-        if not self.aws_config or 'ssh_host' not in self.aws_config:
+        if not self.aws_config:
             return {
                 'healthy': False,
                 'error': 'AWS config obrigatório! Carregue aws_config.json',
@@ -1003,7 +1021,22 @@ class HealthChecker:
             }
         
         config = app_configs[app_name]
-        host = self.aws_config['ssh_host']
+        
+        # Descobrir control plane automaticamente para fallback
+        from ..utils.control_plane_discovery import ControlPlaneDiscovery
+        discovery = ControlPlaneDiscovery(self.aws_config)
+        host = discovery.discover_control_plane_ip()
+        
+        if not host:
+            return {
+                'healthy': False,
+                'error': 'Control plane não encontrado para fallback',
+                'status_code': None,
+                'response_time': None,
+                'url': None,
+                'url_type': 'Control plane missing'
+            }
+        
         url = f"http://{host}:{config['port']}{config['path']}"
         
         if verbose:

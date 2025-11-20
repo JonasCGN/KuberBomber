@@ -193,19 +193,18 @@ def configure_aws_mode(simulator):
         simulator.is_aws_mode = True
         
         print(f"✅ Configuração AWS carregada:")
-        print(f"  • SSH Host: {aws_config.get('ssh_host', 'N/A')}")
+        print(f"  • Control plane descoberto: {aws_config.get('ssh_host', 'N/A')}")
         print(f"  • SSH User: {aws_config.get('ssh_user', 'N/A')}")
         print(f"  • SSH Key: {aws_config.get('ssh_key', 'N/A')}")
         
-        # Criar AWS injector manualmente
-        ssh_host = aws_config.get('ssh_host', '')
+        # Criar AWS injector manualmente com descoberta automática
         simulator.aws_injector = AWSFailureInjector(
-            ssh_host=ssh_host,
+            ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem'),
             ssh_user=aws_config.get('ssh_user', 'ubuntu'),
-            ssh_key=aws_config.get('ssh_key', '~/.ssh/vockey.pem')
+            aws_config=aws_config  # Passar config completo para discovery
         )
         
-        print(f"✅ AWS injector configurado para {ssh_host}")
+        print("✅ AWS injector configurado com descoberta automática de control plane")
         
         # Verificar se pode conectar
         if hasattr(simulator, 'aws_injector') and simulator.aws_injector:

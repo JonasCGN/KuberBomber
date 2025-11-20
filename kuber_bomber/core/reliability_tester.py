@@ -74,13 +74,13 @@ class ReliabilityTester:
         
         # ===== INJETORES DE FALHA: ESCOLHER AWS OU LOCAL =====
         if self.is_aws_mode and aws_config:
-            # MODO AWS: Usar APENAS aws_injector
-            print("🔧 Inicializando APENAS AWS injector...")
+            # MODO AWS: Usar APENAS aws_injector com descoberta automática
+            print("🔧 Inicializando AWS injector com descoberta automática...")
             from ..failure_injectors.aws_injector import AWSFailureInjector
             self.aws_injector = AWSFailureInjector(
                 ssh_key=aws_config['ssh_key'],
-                ssh_host=aws_config['ssh_host'],
-                ssh_user=aws_config['ssh_user']
+                ssh_user=aws_config['ssh_user'],
+                aws_config=aws_config  # Passar config completo para discovery
             )
             print("✅ AWS injector configurado - injetores locais não serão usados")
         else:

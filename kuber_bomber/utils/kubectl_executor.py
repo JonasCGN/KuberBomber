@@ -62,10 +62,17 @@ class KubectlExecutor:
             
         kubectl_cmd = ['sudo', 'kubectl'] + args
         
-        # Usar configuração SSH do aws_config
+        # Usar configuração SSH do aws_config com descoberta automática
         ssh_key = self.aws_config.get('ssh_key', '~/.ssh/vockey.pem')
         ssh_user = self.aws_config.get('ssh_user', 'ubuntu')
-        ssh_host = self.aws_config.get('ssh_host')
+        
+        # Descobrir control plane automaticamente
+        from .control_plane_discovery import ControlPlaneDiscovery
+        discovery = ControlPlaneDiscovery(self.aws_config)
+        ssh_host = discovery.discover_control_plane_ip()
+        
+        if not ssh_host:
+            return {'returncode': 1, 'stdout': '', 'stderr': 'Control plane não encontrado'}
         
         ssh_cmd = [
             'ssh', '-i', ssh_key,

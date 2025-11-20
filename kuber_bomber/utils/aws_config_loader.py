@@ -3,8 +3,8 @@
 Carregador Central de Configuração AWS
 =====================================
 
-Função centralizada para carregar aws_config.json e validar configurações.
-Remove todos os hardcoded values e força uso do arquivo de configuração.
+Função centralizada para carregar aws_config.json e descobrir automaticamente
+o IP do control plane. Remove dependência do ssh_host fixo.
 """
 
 import json
@@ -14,7 +14,7 @@ from typing import Dict, Optional
 
 def load_aws_config() -> Optional[Dict]:
     """
-    Carrega configuração AWS do arquivo aws_config.json.
+    Carrega configuração AWS do arquivo aws_config.json e descobre automaticamente o control plane.
     
     Returns:
         Dict com configuração AWS ou None se arquivo não existe/inválido
@@ -26,18 +26,18 @@ def load_aws_config() -> Optional[Dict]:
         print(f"❌ ERRO: Arquivo {config_path} não encontrado!")
         print(f"📁 Crie o arquivo com:")
         print(f"{{")
-        print(f"  \"ssh_host\": \"SEU_IP_AWS\",")
         print(f"  \"ssh_key\": \"~/.ssh/vockey.pem\",")
         print(f"  \"ssh_user\": \"ubuntu\"")
         print(f"}}")
+        print(f"💡 Nota: ssh_host será descoberto automaticamente via AWS CLI")
         return None
     
     try:
         with open(config_path, 'r') as f:
             config = json.load(f)
         
-        # Validar campos obrigatórios
-        required_fields = ['ssh_host', 'ssh_key', 'ssh_user']
+        # Validar campos obrigatórios (sem ssh_host)
+        required_fields = ['ssh_key', 'ssh_user']
         for field in required_fields:
             if field not in config:
                 print(f"❌ ERRO: Campo '{field}' não encontrado em {config_path}")
@@ -46,15 +46,25 @@ def load_aws_config() -> Optional[Dict]:
                 print(f"❌ ERRO: Campo '{field}' inválido em {config_path}")
                 return None
         
-        # Validar formato do IP
-        ssh_host = config['ssh_host']
-        if not _is_valid_ip(ssh_host):
-            print(f"❌ ERRO: SSH host '{ssh_host}' não é um IP válido!")
-            print(f"📝 Verifique se o IP em {config_path} está correto")
+        # Descobrir control plane automaticamente
+        from .control_plane_discovery import ControlPlaneDiscovery
+        
+        discovery = ControlPlaneDiscovery(config)
+        control_plane_ip = discovery.discover_control_plane_ip()
+        
+        if not control_plane_ip:
+            print(f"❌ ERRO: Não foi possível descobrir o control plane!")
+            print(f"� Verifique se:")
+            print(f"   1. AWS CLI está configurado corretamente")
+            print(f"   2. Instância do control plane está rodando")
+            print(f"   3. Control plane tem tag Name com 'control' ou 'master'")
             return None
         
+        # Adicionar o IP descoberto na configuração
+        config['ssh_host'] = control_plane_ip
+        
         print(f"✅ Configuração AWS carregada de {config_path}")
-        print(f"🌐 SSH Host: {config['ssh_host']}")
+        print(f"🌐 Control plane descoberto: {control_plane_ip}")
         print(f"🔑 SSH Key: {config['ssh_key']}")
         print(f"👤 SSH User: {config['ssh_user']}")
         
@@ -131,8 +141,26 @@ def require_aws_config() -> Dict:
     return config
 
 
-def _is_valid_ip(ip: str) -> bool:
-    """Verifica se string é um IP válido."""
-    import re
-    pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
-    return bool(re.match(pattern, ip))
+def refresh_control_plane_discovery(aws_config: Dict) -> Optional[str]:
+    """
+    Força nova descoberta do control plane (útil após shutdown/restart).
+    
+    Args:
+        aws_config: Configuração AWS atual
+        
+    Returns:
+        Novo IP do control plane ou None se não encontrado
+    """
+    from .control_plane_discovery import ControlPlaneDiscovery
+    
+    print("🔄 Forçando nova descoberta do control plane...")
+    discovery = ControlPlaneDiscovery(aws_config)
+    new_ip = discovery.discover_control_plane_ip(force_refresh=True)
+    
+    if new_ip:
+        aws_config['ssh_host'] = new_ip
+        print(f"✅ Control plane atualizado: {new_ip}")
+        return new_ip
+    else:
+        print("❌ Não foi possível redescobrir o control plane")
+        return None
