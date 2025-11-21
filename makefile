@@ -1,8 +1,5 @@
 .PHONY: clear_maven run_deploy_aws run_deploy_aplication destroy_deploy_aplication run_all_failures run_all_failures_aws run_graficos run_simulation run_test_pode_limiter test_aws_pod_kill_processes test_aws_pod_kill_init test_aws_worker_kill_processes test_aws_worker_kill_kubelet test_aws_worker_delete_proxy test_aws_worker_restart_containerd test_aws_cp_kill_processes test_aws_cp_kill_apiserver test_aws_cp_kill_controller test_aws_cp_kill_scheduler test_aws_cp_kill_etcd test_aws_list_targets test_shutdown_reliability_aws test_shutdown_reliability_local test_shutdown_script_reliability test_shutdown_script_simulator test_shutdown_script_combined test_shutdown_all
 
-clear_maven:
-	cd targetsystem && mvn clean install
-
 run_deploy_aws:
 	cd targetsystem &&  cdk bootstrap --template my-bootstrap-template.yaml
 
@@ -11,6 +8,9 @@ run_deploy_aplication:
 
 destroy_deploy_aplication:
 	cd targetsystem &&  cdk destroy -f
+
+clear_maven:
+	cd targetsystem && mvn clean install
 
 # 🎯 Executa TODOS os métodos de falha com 30 iterações e 10s de intervalo
 run_all_failures:
@@ -60,16 +60,16 @@ run_all_failures_aws:
 # 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method delete_kube_proxy --target ip-10-0-0-241 --iterations 10 --interval 5 --aws
 # 	@echo ""
-# 	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target ip-10-0-0-241 --iterations 10 --interval 5 --aws
-# 	@echo ""
+	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method restart_containerd --target ip-10-0-0-12 --iterations 10 --interval 5 --aws
+	@echo ""
 # 	@echo "🧪 ===== TESTE SHUTDOWN WORKER NODE - RELIABILITY TESTER AWS ====="
 # 	cd kuber_bomber && python3 reliability_tester.py --component worker_node --failure-method shutdown_worker_node --target ip-10-0-0-241 --iterations 3 --interval 10 --aws
 # 	@echo ""
 # 	@echo "🎛️  ===== TESTES DE CONTROL PLANE AWS ====="
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 # 	@echo ""
-	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method shutdown_control_plane --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
-	@echo ""
+# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method shutdown_control_plane --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
+# 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target ip-10-0-0-28 --iterations 10 --interval 5 --aws
 # 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_controller_manager --target ip-10-0-0-28 --iterations 10 --interval 5 --aws

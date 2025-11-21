@@ -450,11 +450,9 @@ class ReliabilityTester:
         print(f"\n⏳ AGUARDANDO RECUPERAÇÃO...")
         recovery_start = time.time()
         
-        # CORREÇÃO: Usar SEMPRE o método do health_checker que já funciona
-        # O health_checker.wait_for_recovery() já tem suporte AWS completo
-        recovered, recovery_time = self.health_checker.wait_for_recovery(
-            discovered_apps=getattr(self, 'discovered_apps', None)
-        )
+        # Usar método combinado para verificação mais robusta (running + curl)
+        print(f"🔍 Verificando recuperação com método combinado (running + curl)...")
+        recovered, recovery_time = self.health_checker.wait_for_pods_recovery_combined()
         
         # ========== RESULTADO ==========
         total_time = time.time() - iteration_start

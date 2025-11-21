@@ -261,7 +261,171 @@ class ExemploUso:
             traceback.print_exc()
             return []
     
-    def check_availability(self) -> Optional[Dict]:
+    def check_pods_health(self) -> Dict:
+        """
+        Demonstra os novos métodos de verificação de pods (running + curl).
+        
+        Este método executa:
+        1. Verificação via status 'Running'
+        2. Verificação via curl nos IPs dos pods
+        3. Verificação combinada (ambos os métodos)
+        
+        Returns:
+            Dicionário com resultados das verificações
+        """
+        print("\n🔍 === VERIFICAÇÃO DE SAÚDE DOS PODS ===\n")
+        
+        try:
+            # Inicializar health_checker se necessário
+            if not hasattr(self, 'health_checker') or not self.health_checker:
+                from kuber_bomber.monitoring.health_checker import HealthChecker
+                aws_config = None
+                if self.use_aws and self.config:
+                    aws_config = self.config.get_aws_config()
+                self.health_checker = HealthChecker(aws_config=aws_config)
+            
+            results = {}
+            
+            # 1. Verificação via status Running
+            print("📋 MÉTODO 1: Verificando status 'Running' dos pods...")
+            print("-" * 50)
+            all_running, running_details = self.health_checker.check_pods_running_status(verbose=True)
+            results['running_check'] = {
+                'all_running': all_running,
+                'details': running_details
+            }
+            
+            # 2. Verificação via curl
+            print("\n🌐 MÉTODO 2: Verificando pods via curl...")
+            print("-" * 50)
+            all_responding, curl_details = self.health_checker.check_pods_via_curl(verbose=True)
+            results['curl_check'] = {
+                'all_responding': all_responding,
+                'details': curl_details
+            }
+            
+            # 3. Verificação combinada
+            print("\n🔍 MÉTODO 3: Verificação combinada (Running + Curl)...")
+            print("-" * 50)
+            all_healthy, combined_details = self.health_checker.check_pods_combined(verbose=True)
+            results['combined_check'] = {
+                'all_healthy': all_healthy,
+                'details': combined_details
+            }
+            
+            # Resumo
+            print("\n📊 === RESUMO DA VERIFICAÇÃO ===")
+            print(f"✅ Todos Running: {'Sim' if all_running else 'Não'}")
+            print(f"🌐 Todos respondendo curl: {'Sim' if all_responding else 'Não'}")
+            print(f"🔍 Todos saudáveis (combinado): {'Sim' if all_healthy else 'Não'}")
+            
+            if not all_healthy:
+                print("\n⚠️ PROBLEMAS DETECTADOS:")
+                for pod_name, details in combined_details.items():
+                    if not details['healthy']:
+                        issues = []
+                        if not details['running_and_ready']:
+                            issues.append(f"Status: {details['status']}")
+                        if not details['responding_curl']:
+                            issues.append("Não responde curl")
+                        print(f"   ❌ {pod_name}: {', '.join(issues)}")
+            
+            return results
+            
+        except Exception as e:
+            print(f"❌ Erro ao verificar saúde dos pods: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+    
+    def test_recovery_methods(self) -> Dict:
+        """
+        Demonstra os diferentes métodos de aguardar recuperação.
+        
+        Este método compara:
+        1. wait_for_recovery (método original)
+        2. wait_for_pods_recovery (via curl)
+        3. wait_for_pods_recovery_combined (running + curl)
+        
+        Returns:
+            Dicionário com tempos de cada método
+        """
+        print("\n⏱️ === TESTE DOS MÉTODOS DE RECUPERAÇÃO ===\n")
+        print("Este teste verifica os diferentes métodos de aguardar recuperação.")
+        print("NOTA: Execute apenas quando o sistema estiver estável!")
+        print()
+        
+        confirm = input("Continuar com teste de recuperação? (s/N): ").lower().strip()
+        if confirm not in ['s', 'sim', 'y', 'yes']:
+            print("Teste cancelado.")
+            return {}
+        
+        try:
+            # Inicializar health_checker se necessário
+            if not hasattr(self, 'health_checker') or not self.health_checker:
+                from kuber_bomber.monitoring.health_checker import HealthChecker
+                aws_config = None
+                if self.use_aws and self.config:
+                    aws_config = self.config.get_aws_config()
+                self.health_checker = HealthChecker(aws_config=aws_config)
+            
+            results = {}
+            
+            # 1. Método original (HTTP applications)
+            print("1️⃣ MÉTODO ORIGINAL: wait_for_recovery")
+            print("   Verifica aplicações via HTTP endpoints")
+            import time
+            start_time = time.time()
+            recovered, recovery_time = self.health_checker.wait_for_recovery(timeout=30)
+            method1_time = time.time() - start_time
+            results['original_method'] = {
+                'recovered': recovered,
+                'recovery_time': recovery_time,
+                'total_time': method1_time
+            }
+            print(f"   ✅ Resultado: {'Recuperado' if recovered else 'Timeout'} em {recovery_time:.2f}s")
+            
+            # 2. Método via curl
+            print("\n2️⃣ MÉTODO CURL: wait_for_pods_recovery")
+            print("   Verifica pods via curl direto nos IPs")
+            start_time = time.time()
+            recovered, recovery_time = self.health_checker.wait_for_pods_recovery()
+            method2_time = time.time() - start_time
+            results['curl_method'] = {
+                'recovered': recovered,
+                'recovery_time': recovery_time,
+                'total_time': method2_time
+            }
+            print(f"   ✅ Resultado: {'Recuperado' if recovered else 'Timeout'} em {recovery_time:.2f}s")
+            
+            # 3. Método combinado
+            print("\n3️⃣ MÉTODO COMBINADO: wait_for_pods_recovery_combined")
+            print("   Verifica pods via status Running + curl")
+            start_time = time.time()
+            recovered, recovery_time = self.health_checker.wait_for_pods_recovery_combined(timeout=30)
+            method3_time = time.time() - start_time
+            results['combined_method'] = {
+                'recovered': recovered,
+                'recovery_time': recovery_time,
+                'total_time': method3_time
+            }
+            print(f"   ✅ Resultado: {'Recuperado' if recovered else 'Timeout'} em {recovery_time:.2f}s")
+            
+            # Comparação
+            print("\n📊 === COMPARAÇÃO DOS MÉTODOS ===")
+            print(f"{'Método':<20} {'Recuperado':<12} {'Tempo (s)':<12} {'Total (s)':<12}")
+            print("-" * 56)
+            print(f"{'Original':<20} {'Sim' if results['original_method']['recovered'] else 'Não':<12} {results['original_method']['recovery_time']:<12.2f} {results['original_method']['total_time']:<12.2f}")
+            print(f"{'Curl':<20} {'Sim' if results['curl_method']['recovered'] else 'Não':<12} {results['curl_method']['recovery_time']:<12.2f} {results['curl_method']['total_time']:<12.2f}")
+            print(f"{'Combinado':<20} {'Sim' if results['combined_method']['recovered'] else 'Não':<12} {results['combined_method']['recovery_time']:<12.2f} {results['combined_method']['total_time']:<12.2f}")
+            
+            return results
+            
+        except Exception as e:
+            print(f"❌ Erro ao testar métodos de recuperação: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
         """
         Executa simulação de disponibilidade usando configuração existente.
         
@@ -488,7 +652,9 @@ def main():
         print("1. Get_Config")
         print("2. Teste de disponibilidade")
         print("3. get_config_all")
-        print("4. Executar fluxo completo (recomendado)")
+        print("4. Verificar saúde dos pods (Running + Curl)")
+        print("5. Testar métodos de recuperação")
+        print("6. Executar fluxo completo (recomendado)")
         print("0. Sair")
         print()
         
@@ -502,6 +668,10 @@ def main():
             elif opcao == '3':
                 exemplo.get_config(run_mttr_analysis=True)
             elif opcao == '4':
+                exemplo.check_pods_health()
+            elif opcao == '5':
+                exemplo.test_recovery_methods()
+            elif opcao == '6':
                 exemplo.executar_fluxo_completo()
             elif opcao == '0':
                 print("\n✅ Até logo!")

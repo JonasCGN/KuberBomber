@@ -1116,6 +1116,343 @@ class HealthChecker:
                 'url_type': "AWS NodePort (fallback)"
             }
             
+    def check_pods_running_status(self, verbose: bool = True) -> Tuple[bool, Dict]:
+        """
+        Verifica se todos os pods estão no status 'Running' e prontos.
+        
+        Args:
+            verbose: Se deve imprimir mensagens detalhadas
+            
+        Returns:
+            Tuple com (todos_pods_running, detalhes_pods)
+        """
+        try:
+            result = self.kubectl.execute_kubectl(['get', 'pods', '-o', 'json'])
+            
+            if not result['success']:
+                if verbose:
+                    print(f"❌ Erro ao obter pods: {result.get('error', 'Unknown error')}")
+                return False, {}
+            
+            import json
+            pods_data = json.loads(result['output'])
+            pod_details = {}
+            all_running = True
+            
+            for pod in pods_data.get('items', []):
+                pod_name = pod['metadata']['name']
+                pod_status = pod['status'].get('phase', 'Unknown')
+                
+                # Verificar se está Ready
+                ready = False
+                conditions = pod['status'].get('conditions', [])
+                for condition in conditions:
+                    if condition['type'] == 'Ready':
+                        ready = condition['status'] == 'True'
+                        break
+                
+                # Contar restarts
+                restarts = 0
+                container_statuses = pod['status'].get('containerStatuses', [])
+                if container_statuses:
+                    restarts = container_statuses[0].get('restartCount', 0)
+                
+                pod_details[pod_name] = {
+                    'status': pod_status,
+                    'ready': ready,
+                    'restarts': restarts,
+                    'running_and_ready': pod_status == 'Running' and ready
+                }
+                
+                if not (pod_status == 'Running' and ready):
+                    all_running = False
+                
+                if verbose:
+                    emoji = "✅" if pod_status == 'Running' and ready else "❌"
+                    print(f"  {emoji} {pod_name}: {pod_status}, Ready: {ready}, Restarts: {restarts}")
+            
+            if verbose:
+                ready_pods = sum(1 for details in pod_details.values() if details['running_and_ready'])
+                total_pods = len(pod_details)
+                print(f"📊 Pods Running e Ready: {ready_pods}/{total_pods}")
+            
+            return all_running, pod_details
+            
+        except Exception as e:
+            if verbose:
+                print(f"❌ Erro ao verificar status dos pods: {e}")
+            return False, {}
+    
+    def check_pods_via_curl(self, verbose: bool = True) -> Tuple[bool, Dict]:
+        """
+        Verifica se todos os pods respondem via curl no control plane.
+        
+        Args:
+            verbose: Se deve imprimir mensagens detalhadas
+            
+        Returns:
+            Tuple com (todos_pods_respondem, detalhes_responses)
+        """
+        try:
+            # Obter informações dos pods com IPs
+            pods_info = self.kubectl.get_pods_info()
+            
+            if not pods_info:
+                if verbose:
+                    print("❌ Nenhuma informação de pods obtida")
+                return False, {}
+            
+            response_details = {}
+            all_responding = True
+            
+            if verbose:
+                print(f"🌐 Testando {len(pods_info)} pods via curl...")
+            
+            for pod_info in pods_info:
+                pod_name = pod_info.get('name')
+                pod_ip = pod_info.get('ip')
+                pod_port = pod_info.get('port')
+                pod_node = pod_info.get('node')
+                
+                if not pod_ip or not pod_port:
+                    if verbose:
+                        print(f"  ❌ {pod_name}: IP ou porta não encontrados")
+                    response_details[pod_name] = {
+                        'responding': False,
+                        'error': 'IP ou porta não encontrados',
+                        'status_code': None
+                    }
+                    all_responding = False
+                    continue
+                
+                # Fazer curl via SSH se estiver em modo AWS
+                url = f"http://{pod_ip}:{pod_port}/"
+                
+                try:
+                    if self.is_aws_mode and hasattr(self, 'aws_injector') and self.aws_injector:
+                        # Usar SSH para fazer curl no control plane
+                        if not pod_node:
+                            response_details[pod_name] = {
+                                'responding': False,
+                                'error': 'Node não encontrado para SSH',
+                                'url': url,
+                                'method': 'SSH curl'
+                            }
+                            all_responding = False
+                            if verbose:
+                                print(f"  ❌ {pod_name}: Node não encontrado para SSH")
+                            continue
+                            
+                        curl_cmd = f'curl -s -o /dev/null -w "%{{http_code}}" --max-time 3 {url}'
+                        curl_result = self.aws_injector._execute_ssh_command(
+                            pod_node,
+                            curl_cmd,
+                            timeout=5
+                        )
+                        
+                        if curl_result[0] and curl_result[1].strip():
+                            status_code = curl_result[1].strip()
+                            responding = status_code in ['200', '404']  # 404 também é válido (app ativa)
+                            
+                            response_details[pod_name] = {
+                                'responding': responding,
+                                'status_code': status_code,
+                                'url': url,
+                                'method': 'SSH curl'
+                            }
+                            
+                            if verbose:
+                                emoji = "✅" if responding else "❌"
+                                print(f"  {emoji} {pod_name}: HTTP {status_code} ({url})")
+                        else:
+                            response_details[pod_name] = {
+                                'responding': False,
+                                'error': 'Curl falhou ou sem resposta',
+                                'url': url,
+                                'method': 'SSH curl'
+                            }
+                            all_responding = False
+                            
+                            if verbose:
+                                print(f"  ❌ {pod_name}: Curl falhou ({url})")
+                    else:
+                        # Modo local - usar curl direto
+                        import subprocess
+                        result = subprocess.run(
+                            ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '3', url],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        
+                        if result.returncode == 0:
+                            status_code = result.stdout.strip()
+                            responding = status_code in ['200', '404']
+                            
+                            response_details[pod_name] = {
+                                'responding': responding,
+                                'status_code': status_code,
+                                'url': url,
+                                'method': 'Local curl'
+                            }
+                            
+                            if verbose:
+                                emoji = "✅" if responding else "❌"
+                                print(f"  {emoji} {pod_name}: HTTP {status_code} ({url})")
+                        else:
+                            response_details[pod_name] = {
+                                'responding': False,
+                                'error': result.stderr.strip() or 'Curl failed',
+                                'url': url,
+                                'method': 'Local curl'
+                            }
+                            all_responding = False
+                            
+                            if verbose:
+                                print(f"  ❌ {pod_name}: {result.stderr.strip() or 'Curl failed'} ({url})")
+                    
+                    if not response_details[pod_name]['responding']:
+                        all_responding = False
+                        
+                except Exception as e:
+                    response_details[pod_name] = {
+                        'responding': False,
+                        'error': str(e),
+                        'url': url
+                    }
+                    all_responding = False
+                    
+                    if verbose:
+                        print(f"  ❌ {pod_name}: Erro no curl - {e}")
+            
+            if verbose:
+                responding_pods = sum(1 for details in response_details.values() if details['responding'])
+                total_pods = len(response_details)
+                print(f"📊 Pods respondendo via curl: {responding_pods}/{total_pods}")
+            
+            return all_responding, response_details
+            
+        except Exception as e:
+            if verbose:
+                print(f"❌ Erro ao verificar pods via curl: {e}")
+            return False, {}
+    
+    def check_pods_combined(self, verbose: bool = True) -> Tuple[bool, Dict]:
+        """
+        Verifica pods usando ambos os métodos: running status e curl.
+        
+        Args:
+            verbose: Se deve imprimir mensagens detalhadas
+            
+        Returns:
+            Tuple com (todos_pods_saudaveis, detalhes_combinados)
+        """
+        if verbose:
+            print("🔍 === VERIFICAÇÃO COMBINADA DE PODS ===")
+        
+        # Verificar status running
+        if verbose:
+            print("📋 Verificando status 'Running' dos pods...")
+        all_running, running_details = self.check_pods_running_status(verbose=verbose)
+        
+        # Verificar via curl
+        if verbose:
+            print("\n🌐 Verificando pods via curl...")
+        all_responding, curl_details = self.check_pods_via_curl(verbose=verbose)
+        
+        # Combinar resultados
+        combined_details = {}
+        all_healthy = True
+        
+        # Usar pods do running_details como base
+        for pod_name in running_details.keys():
+            running_info = running_details[pod_name]
+            curl_info = curl_details.get(pod_name, {'responding': False, 'error': 'Pod not found in curl check'})
+            
+            pod_healthy = running_info['running_and_ready'] and curl_info['responding']
+            
+            combined_details[pod_name] = {
+                'running_and_ready': running_info['running_and_ready'],
+                'status': running_info['status'],
+                'ready': running_info['ready'],
+                'restarts': running_info['restarts'],
+                'responding_curl': curl_info['responding'],
+                'curl_status_code': curl_info.get('status_code'),
+                'curl_error': curl_info.get('error'),
+                'healthy': pod_healthy
+            }
+            
+            if not pod_healthy:
+                all_healthy = False
+        
+        if verbose:
+            print("\n📊 === RESULTADO COMBINADO ===")
+            healthy_pods = sum(1 for details in combined_details.values() if details['healthy'])
+            total_pods = len(combined_details)
+            print(f"✅ Pods saudáveis (Running + Respondendo): {healthy_pods}/{total_pods}")
+            
+            for pod_name, details in combined_details.items():
+                emoji = "✅" if details['healthy'] else "❌"
+                status_msg = "Saudável" if details['healthy'] else "Problema"
+                print(f"  {emoji} {pod_name}: {status_msg}")
+                if not details['healthy']:
+                    if not details['running_and_ready']:
+                        print(f"    📋 Status: {details['status']}, Ready: {details['ready']}")
+                    if not details['responding_curl']:
+                        print(f"    🌐 Curl: {details.get('curl_error', 'Não respondendo')}")
+        
+        return all_healthy, combined_details
+    
+    def wait_for_pods_recovery_combined(self, timeout: Optional[int] = None) -> Tuple[bool, float]:
+        """
+        Aguarda recuperação dos pods usando verificação combinada (running + curl).
+        
+        Args:
+            timeout: Timeout específico em segundos. Se None, usa o timeout global.
+            
+        Returns:
+            Tuple com (recuperou_com_sucesso, tempo_de_recuperacao)
+        """
+        import time
+        
+        if timeout is None:
+            timeout = self.config.current_recovery_timeout
+        
+        print(f"⏳ Aguardando recuperação combinada (running + curl)")
+        print(f"📊 Timeout: {timeout}s")
+        
+        start_time = time.time()
+        check_count = 0
+        
+        while time.time() - start_time < timeout:
+            elapsed = time.time() - start_time
+            check_count += 1
+            
+            print(f"\n🔍 Verificação #{check_count} (tempo: {elapsed:.1f}s/{timeout}s)")
+            
+            # Verificar pods de forma combinada
+            all_healthy, pod_details = self.check_pods_combined(verbose=True)
+            
+            if all_healthy:
+                recovery_time = time.time() - start_time
+                print(f"\n✅ Todos os pods recuperados (running + curl) em {recovery_time:.2f}s")
+                return True, recovery_time
+            else:
+                unhealthy_pods = [name for name, details in pod_details.items() if not details['healthy']]
+                print(f"⚠️ Pods ainda com problemas: {len(unhealthy_pods)} de {len(pod_details)}")
+                for pod_name in unhealthy_pods:
+                    details = pod_details[pod_name]
+                    issues = []
+                    if not details['running_and_ready']:
+                        issues.append(f"Status: {details['status']}")
+                    if not details['responding_curl']:
+                        issues.append("Não responde curl")
+                    print(f"  ❌ {pod_name}: {', '.join(issues)}")
+            
+            print(f"⏸️ Aguardando {self.config.health_check_interval}s antes da próxima verificação...")
+            time.sleep(self.config.health_check_interval)
+        
+        print(f"❌ Timeout: Pods não se recuperaram (running + curl) em {timeout}s")
+        return False, timeout
+    
     def wait_for_pods_recovery(self) -> Tuple[bool, float]:
         """Aguarda recuperação via CURL nos IPs dos pods usando threads, sem bloquear pelo get_pods_info."""
         import time

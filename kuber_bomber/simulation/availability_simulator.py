@@ -1739,10 +1739,11 @@ class AvailabilitySimulator:
                     recovery_time = getattr(self, '_last_shutdown_recovery_time', 0.0)
                     print(f"  ⏱️ VALIDAÇÃO - Tempo de recuperação (MTTR) Control Plane: {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
                 else:
-                    # Para outras falhas, fazer verificação normal
-                    _, recovery_time = self.health_checker.wait_for_pods_recovery()
+                    # Para outras falhas, fazer verificação combinada (running + curl)
+                    print(f"  🔍 Verificando recuperação com método combinado (running + curl)...")
+                    _, recovery_time = self.health_checker.wait_for_pods_recovery_combined()
                     next_event.component.total_downtime += recovery_time
-                    print(f"  ⏱️ Tempo de recuperação (falha normal): {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
+                    print(f"  ⏱️ Tempo de recuperação (combinado): {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
                 
                 # Aguardar 1 minuto real (delay fixo) - DEPOIS da recuperação
                 print(f"⏸️ Aguardando {self.real_delay_between_failures}s (delay entre falhas)...")

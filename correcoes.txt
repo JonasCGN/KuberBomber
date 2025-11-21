@@ -1,12 +1,16 @@
-Fazer com que o calculo do csv seja altamente preciso e com ate 5 casas decimais
-
 - Fazer metodo shutdown control-plane - CERTO
 
-3 - 5 Interações
+Criar um README configuracoes inicias e como usar e valores padrao caso nao ache  - CERTO
+
+-> Chama get-config -> Fazer o teste(get-config-all)(Pegar os mttrs) -> get de disponibilidade  - CERTO
+
+-> Criar uma classe exemplo (Vai ter so os metodos acima)  - CERTO
 
 
-Criar um README configuracoes inicias e como usar e valores padrao caso nao ache
+---------------------------------------------------------------------
 
--> Chama get-config -> Fazer o teste(get-config-all)(Pegar os mttrs) -> get de disponibilidade
+- 5 Interações
 
--> Criar uma classe exemplo (Vai ter so os metodos acima)
+- Verificar com pods via running e curl (os dois)
+
+---------------------------------------------------------------------
