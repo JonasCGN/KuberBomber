@@ -26,6 +26,9 @@ class HealthChecker:
     # Cache estático para evitar descoberta duplicada
     _discovered_apps_cache = None
     _discovery_logged = False
+    _control_plane_cache = None
+    _control_plane_cache_time = None
+    _cache_duration = 60  # Cache por 60 segundos
     
     def __init__(self, aws_config: Optional[dict] = None):
         """
@@ -50,6 +53,54 @@ class HealthChecker:
         
         self.config = get_config(aws_mode=self.is_aws_mode)
         self.kubectl = KubectlExecutor(aws_config=aws_config if self.is_aws_mode else None)
+    
+    def _get_cached_control_plane(self, verbose: bool = True):
+        """
+        Obtém control plane com cache para evitar descobertas repetidas.
+        
+        Args:
+            verbose: Se deve imprimir mensagens (apenas na primeira descoberta)
+            
+        Returns:
+            IP do control plane ou None se não encontrado
+        """
+        import time
+        
+        # Verificar se o cache ainda é válido
+        current_time = time.time()
+        if (self._control_plane_cache is not None and 
+            self._control_plane_cache_time is not None and
+            current_time - self._control_plane_cache_time < self._cache_duration):
+            return self._control_plane_cache
+            
+        # Cache expirou ou não existe, fazer nova descoberta
+        if verbose and self._control_plane_cache is None:
+            print("🔍 Descobrindo control plane automaticamente...")
+            
+        from ..utils.control_plane_discovery import ControlPlaneDiscovery
+        discovery = ControlPlaneDiscovery(self.aws_config)
+        control_plane_ip = discovery.discover_control_plane_ip()
+        
+        if control_plane_ip:
+            # Atualizar cache
+            self._control_plane_cache = control_plane_ip
+            self._control_plane_cache_time = current_time
+            
+            if verbose and not self._discovery_logged:
+                print(f"✅ Control plane descoberto: ControlPlane ({control_plane_ip})")
+                self._discovery_logged = True
+                
+            return control_plane_ip
+        else:
+            if verbose:
+                print("❌ Control plane não encontrado")
+            return None
+    
+    def _clear_control_plane_cache(self):
+        """Limpa o cache do control plane (útil para testes ou quando há mudanças)."""
+        self._control_plane_cache = None
+        self._control_plane_cache_time = None
+        self._discovery_logged = False
         
     def check_application_health(self, service: str, verbose: bool = True, use_ingress: bool = False) -> Dict:
         """
@@ -915,10 +966,8 @@ class HealthChecker:
                 # Usar aws_injector para executar comando no control plane
                 result = self.aws_injector.run_remote_command(curl_cmd)
             else:
-                # Fallback: descobrir control plane dinamicamente  
-                from ..utils.control_plane_discovery import ControlPlaneDiscovery
-                discovery = ControlPlaneDiscovery(self.aws_config)
-                control_plane_ip = discovery.discover_control_plane_ip()
+                # Fallback: usar control plane em cache
+                control_plane_ip = self._get_cached_control_plane(verbose=False)
                 
                 if not control_plane_ip:
                     if verbose:
@@ -1022,10 +1071,8 @@ class HealthChecker:
         
         config = app_configs[app_name]
         
-        # Descobrir control plane automaticamente para fallback
-        from ..utils.control_plane_discovery import ControlPlaneDiscovery
-        discovery = ControlPlaneDiscovery(self.aws_config)
-        host = discovery.discover_control_plane_ip()
+        # Usar control plane em cache para fallback
+        host = self._get_cached_control_plane(verbose=False)
         
         if not host:
             return {
@@ -1247,7 +1294,8 @@ class HealthChecker:
                         curl_result = self.aws_injector._execute_ssh_command(
                             pod_node,
                             curl_cmd,
-                            timeout=5
+                            timeout=5,
+                            show_print=False
                         )
                         
                         if curl_result[0] and curl_result[1].strip():
@@ -1451,6 +1499,125 @@ class HealthChecker:
             time.sleep(self.config.health_check_interval)
         
         print(f"❌ Timeout: Pods não se recuperaram (running + curl) em {timeout}s")
+        return False, timeout
+    
+    def check_pods_combined_silent(self, timeout: int = 5) -> Tuple[bool, Dict]:
+        """
+        Versão silenciosa da verificação combinada - apenas tabela resumo.
+        
+        Args:
+            timeout: Timeout em segundos para a verificação
+            
+        Returns:
+            tuple: (bool sucesso, dict detalhes)
+        """
+        # Verificar status Running (silenciosamente)
+        all_running, running_details = self.check_pods_running_status(verbose=False)
+        
+        # Verificar curl (silenciosamente) 
+        all_responding, curl_details = self.check_pods_via_curl(verbose=False)
+        
+        # Combinar resultados em formato de tabela
+        all_pods = {}
+        
+        # Processar pods com status Running
+        for pod_name in running_details.keys():
+            running_info = running_details[pod_name]
+            all_pods[pod_name] = {
+                'name': pod_name,
+                'running': running_info['running_and_ready'],
+                'responding': False,
+                'kubectl_status': f"{running_info['status']}/{running_info['ready']}",
+                'curl_status': 'Pending'
+            }
+        
+        # Processar pods com curl
+        for pod_name in curl_details.keys():
+            curl_info = curl_details[pod_name]
+            if pod_name in all_pods:
+                all_pods[pod_name]['responding'] = curl_info['responding']
+                if curl_info['responding']:
+                    all_pods[pod_name]['curl_status'] = 'OK'
+                else:
+                    error_msg = curl_info.get('error', 'Failed')
+                    all_pods[pod_name]['curl_status'] = error_msg[:10] + "..." if len(error_msg) > 10 else error_msg
+        
+        # Mostrar tabela resumo
+        print("\\n📊 Status (Kubectl + Curl):")
+        print("─" * 70)
+        print(f"{'Pod Name':<30} {'Kubectl':<15} {'Curl':<15}")
+        print("─" * 70)
+        
+        for pod_name, pod_info in sorted(all_pods.items()):
+            kubectl_display = "✅ Ready" if pod_info['running'] else f"❌ {pod_info['kubectl_status']}"
+            curl_display = "✅ OK" if pod_info['responding'] else f"❌ {pod_info['curl_status']}"
+            print(f"{pod_name:<30} {kubectl_display:<15} {curl_display:<15}")
+        
+        # Contar pods saudáveis
+        healthy_count = sum(1 for pod in all_pods.values() 
+                          if pod['running'] and pod['responding'])
+        total_count = len(all_pods)
+        
+        print("─" * 70)
+        print(f"📊 Resumo: {healthy_count}/{total_count} pods saudáveis")
+        
+        # Preparar detalhes de retorno
+        combined_details = {}
+        for pod_name, pod_info in all_pods.items():
+            running_info = running_details.get(pod_name, {})
+            curl_info = curl_details.get(pod_name, {})
+            
+            combined_details[pod_name] = {
+                'running_and_ready': pod_info['running'],
+                'responding_curl': pod_info['responding'],
+                'healthy': pod_info['running'] and pod_info['responding'],
+                'status': running_info.get('status', 'Unknown'),
+                'ready': running_info.get('ready', False),
+                'restarts': running_info.get('restarts', 0),
+                'curl_status_code': curl_info.get('status_code'),
+                'curl_error': curl_info.get('error')
+            }
+        
+        return healthy_count == total_count, combined_details
+
+    def wait_for_pods_recovery_combined_silent(self, timeout: Optional[int] = None) -> Tuple[bool, float]:
+        """
+        Versão silenciosa da espera por recuperação combinada.
+        
+        Args:
+            timeout: Timeout específico em segundos. Se None, usa o timeout global.
+            
+        Returns:
+            Tuple com (recuperou_com_sucesso, tempo_de_recuperacao)
+        """
+        import time
+        
+        if timeout is None:
+            timeout = self.config.current_recovery_timeout
+        
+        print(f"⏳ Verificação combinada (timeout: {timeout}s)")
+        
+        start_time = time.time()
+        check_count = 0
+        
+        while time.time() - start_time < timeout:
+            elapsed = time.time() - start_time
+            check_count += 1
+            
+            print(f"\\n🔍 Verificação #{check_count} ({elapsed:.1f}s/{timeout}s)")
+            
+            # Verificar pods de forma combinada e silenciosa
+            all_healthy, pod_details = self.check_pods_combined_silent()
+            
+            if all_healthy:
+                recovery_time = time.time() - start_time
+                print(f"\\n✅ Recuperação completa em {recovery_time:.2f}s")
+                return True, recovery_time
+            
+            print(f"⏸️ Aguardando {self.config.health_check_interval}s...")
+            time.sleep(self.config.health_check_interval)
+        
+        print(f"❌ Timeout: {timeout}s esgotado")
         return False, timeout
     
     def wait_for_pods_recovery(self) -> Tuple[bool, float]:

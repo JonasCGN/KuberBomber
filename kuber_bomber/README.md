@@ -1,4 +1,123 @@
-# 🎯 Testes de Confiabilidade - Todos os Componentes Kubernetes
+# 🎯 Kuber Bomber - Framework de Testes de Confiabilidade para Kubernetes
+
+## ⚙️ PRÉ-REQUISITOS E CONFIGURAÇÃO OBRIGATÓRIA
+
+### 🚨 IMPORTANTE: Requisitos da Aplicação de Teste
+
+Para que o framework funcione corretamente, **todos os pods/containers da aplicação alvo devem ter as seguintes ferramentas instaladas**:
+
+#### Ferramentas Obrigatórias:
+```bash
+# Ferramentas de processo (OBRIGATÓRIO)
+- ps          # Listar processos  
+- kill        # Matar processos
+- pgrep       # Buscar processos
+- pkill       # Matar por nome
+
+# Ferramentas de rede (RECOMENDADO)
+- curl        # Testes de conectividade
+- ping        # Diagnóstico de rede
+- netstat     # Status de conexões
+```
+
+#### Como Instalar (Ubuntu/Debian):
+```bash
+# Dentro do container
+apt update && apt install -y procps psmisc net-tools iputils-ping curl
+```
+
+#### Pacotes necessários:
+- `procps` (ps, kill, pgrep, pkill)
+- `psmisc` (killall, fuser)
+- `net-tools` (netstat)
+- `iputils-ping` (ping)
+- `curl` (curl)
+
+### 🔧 Soluções Automáticas Disponíveis
+
+#### Opção 1: Dockerfile Melhorado (RECOMENDADO)
+```dockerfile
+FROM sua-imagem-base:latest
+
+# Instalar ferramentas obrigatórias
+RUN apt update -qq && \
+    apt install -y -qq \
+    procps \
+    psmisc \
+    net-tools \
+    iputils-ping \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt clean
+
+# Resto da configuração...
+```
+
+#### Opção 2: InitContainer Automático
+O framework pode instalar automaticamente usando initContainers nos deployments Kubernetes.
+
+#### Opção 3: Imagem Enhanced (Disponível)
+Criamos uma versão da imagem com ferramentas pré-instaladas:
+```bash
+# Use esta imagem em seus deployments
+image: iuresf/apprunner-enhanced:latest
+```
+
+### 🧪 Verificar Se Está Funcionando
+
+```bash
+# Testar se tools estão disponíveis
+kubectl exec -it <pod-name> -- ps aux
+kubectl exec -it <pod-name> -- kill -l
+kubectl exec -it <pod-name> -- curl --version
+
+# Se der erro "executable file not found", instale as ferramentas
+```
+
+### 📋 Comandos de Falha Que Precisam das Ferramentas
+
+| Método de Falha | Comando Usado | Ferramenta Necessária | Localização |
+|------------------|---------------|---------------------|-------------|
+| `kill_processes` | `sudo kubectl exec pod -- kill -9 -1` | `kill` (procps) | `/usr/bin/kill` |
+| `kill_init` | `sudo kubectl exec pod -- kill -9 1` | `kill` (procps) | `/usr/bin/kill` |
+| Health checks | `sudo kubectl exec pod -- ps aux` | `ps` (procps) | `/usr/bin/ps` |
+| Process discovery | `sudo kubectl exec pod -- pgrep java` | `pgrep` (procps) | `/usr/bin/pgrep` |
+| Connectivity tests | `curl http://service:port/health` | `curl` | `/usr/bin/curl` |
+
+### ⚠️ Erro Típico Sem Ferramentas
+
+```bash
+# ❌ ERRO: Quando ferramentas não estão instaladas
+ubuntu@control-plane:~$ sudo kubectl exec -it bar-app-69bc4fffc-b82p9 -- ps aux
+error: Internal error occurred: error executing command in container: 
+failed to exec in container: exec: "ps": executable file not found in $PATH
+
+ubuntu@control-plane:~$ sudo kubectl exec -it bar-app-69bc4fffc-b82p9 -- kill -9 -1
+error: Internal error occurred: error executing command in container:
+failed to exec in container: exec: "kill": executable file not found in $PATH
+
+# ✅ SUCESSO: Após instalar ferramentas
+ubuntu@control-plane:~$ sudo kubectl exec bar-app-69bc4fffc-b82p9 -- ps aux
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root           1  0.1  0.7  37348 30872 ?        Ss   18:50   0:00 python server.py
+root         157  0.0  0.0   6792  3840 ?        Rs   18:55   0:00 ps aux
+
+ubuntu@control-plane:~$ sudo kubectl exec bar-app-69bc4fffc-b82p9 -- kill -l
+ 1) SIGHUP       2) SIGINT       3) SIGQUIT      4) SIGILL       5) SIGTRAP
+```
+
+### 🛠️ Verificação Automática
+
+```bash
+# Script para verificar se pod tem ferramentas necessárias
+kubectl get pods -o name | while read pod; do
+    echo "=== Testando $pod ==="
+    kubectl exec $pod -- which ps >/dev/null 2>&1 && echo "✅ ps: OK" || echo "❌ ps: MISSING"
+    kubectl exec $pod -- which kill >/dev/null 2>&1 && echo "✅ kill: OK" || echo "❌ kill: MISSING" 
+    kubectl exec $pod -- which curl >/dev/null 2>&1 && echo "✅ curl: OK" || echo "❌ curl: MISSING"
+    echo ""
+done
+```
 
 ## 🆕 NOVIDADE: Descoberta Automática de Control Plane
 
@@ -411,7 +530,63 @@ DEFAULT_INTERVAL = 60           # 60 segundos entre iterações
 
 ## 🔍 Troubleshooting
 
-### Problema: "Control plane não recupera após shutdown"
+### ❌ Problema: "executable file not found in $PATH"
+
+**Sintomas:**
+```bash
+kubectl exec pod -- ps aux
+# error: executable file not found in $PATH: unknown
+
+kubectl exec pod -- kill -9 1  
+# error: executable file not found in $PATH: unknown
+```
+
+**Causa:** Container não tem ferramentas `ps`, `kill`, `pgrep` instaladas.
+
+**Soluções:**
+
+#### Solução Rápida (Temporária):
+```bash
+# Instalar no pod em execução (perdido no restart)
+kubectl exec -it <pod> -- sh -c "apt update && apt install -y procps psmisc"
+
+# Testar se funcionou
+kubectl exec <pod> -- ps aux
+kubectl exec <pod> -- kill --help
+```
+
+#### Solução Definitiva 1: Modificar Dockerfile
+```dockerfile
+FROM iuresf/apprunner:latest
+
+# Adicionar essa seção ao Dockerfile
+RUN apt update -qq && \
+    apt install -y -qq procps psmisc net-tools iputils-ping curl && \
+    rm -rf /var/lib/apt/lists/* && apt clean
+
+# Rebuild e push da imagem
+```
+
+#### Solução Definitiva 2: Usar Imagem Enhanced
+```yaml
+# Em seus deployments YAML
+containers:
+  - name: app
+    image: iuresf/apprunner-enhanced:latest  # ✅ Tem todas as ferramentas
+```
+
+#### Solução Definitiva 3: Script de Build
+```bash
+# Usar o script fornecido
+cd targetsystem
+./build-enhanced-image.sh
+
+# Atualizar deployments
+sed -i 's|iuresf/apprunner|iuresf/apprunner-enhanced|g' \
+  src/scripts/nodes/controlPlane/kubernetes/kub_deployment.yaml
+```
+
+### ❌ Problema: "Control plane não recupera após shutdown"
 
 ```bash
 # Para Kind: Verificar se container está realmente reiniciando

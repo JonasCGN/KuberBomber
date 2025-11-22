@@ -14,6 +14,17 @@ spec:
       labels:
         app: foo
     spec:
+      shareProcessNamespace: true
+      initContainers:
+        - name: install-tools
+          image: iuresf/apprunner
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc >/dev/null 2>&1 || true
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
       containers:
         - name: foo-app
           image: iuresf/apprunner  # Same image
@@ -29,6 +40,29 @@ spec:
               cpu: "750m"  # Request 100 millicores of CPU
             limits:
               cpu: "750m"  # Limit to 200 millicores of CPU
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+        - name: debug-tools
+          image: ubuntu:20.04
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc curl wget net-tools >/dev/null 2>&1
+              while true; do sleep 30; done
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+      volumes:
+        - name: shared-tools
+          emptyDir: {}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -75,6 +109,17 @@ spec:
       labels:
         app: bar
     spec:
+      shareProcessNamespace: true
+      initContainers:
+        - name: install-tools
+          image: iuresf/apprunner
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc >/dev/null 2>&1 || true
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
       containers:
         - name: bar-app
           image: iuresf/apprunner  # Same image
@@ -90,6 +135,29 @@ spec:
               cpu: "750m"  # Request 750 millicores of CPU
             limits:
               cpu: "750m"  # Limit to 750 millicores of CPU
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+        - name: debug-tools
+          image: ubuntu:20.04
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc curl wget net-tools >/dev/null 2>&1
+              while true; do sleep 30; done
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+      volumes:
+        - name: shared-tools
+          emptyDir: {}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -136,6 +204,17 @@ spec:
       labels:
         app: test
     spec:
+      shareProcessNamespace: true
+      initContainers:
+        - name: install-tools
+          image: iuresf/apprunner
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc >/dev/null 2>&1 || true
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
       containers:
         - name: test-app
           image: iuresf/apprunner
@@ -151,6 +230,29 @@ spec:
               cpu: "100m"
             limits:
               cpu: "100m"
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+        - name: debug-tools
+          image: ubuntu:20.04
+          command: ['sh', '-c']
+          args:
+            - |
+              apt update -qq && apt install -y -qq procps psmisc curl wget net-tools >/dev/null 2>&1
+              while true; do sleep 30; done
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: shared-tools
+              mountPath: /shared
+      volumes:
+        - name: shared-tools
+          emptyDir: {}
 ---
 kind: Service
 apiVersion: v1

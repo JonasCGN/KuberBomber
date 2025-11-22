@@ -162,4 +162,4 @@ docker --version
 docker run --rm hello-world
 ```
 
-Configure a chave vockey.pem
+Configure a chave vockey.pem, tem que ter ps...

@@ -65,24 +65,25 @@ class AWSFailureInjector:
         """
         return self.discovery.get_all_aws_instances()
     
-    def _get_node_public_ip(self, node_name: str) -> str:
+    def _get_node_public_ip(self, node_name: str,show_print=True) -> str:
         """
         Obtém o IP público de um node via descoberta.
         """
         public_ip = self.discovery.get_node_public_ip(node_name)
         
         if public_ip:
-            print(f"🌐 Node {node_name} -> IP público: {public_ip}")
+            if show_print:
+                print(f"🌐 Node {node_name} -> IP público: {public_ip}")
             return public_ip
         else:
             raise Exception(f"Node {node_name} não encontrado nas instâncias AWS")
     
-    def _execute_ssh_command(self, node_name: str, command: str, timeout: int = 30) -> Tuple[bool, str]:
+    def _execute_ssh_command(self, node_name: str, command: str, timeout: int = 30, show_print=True) -> Tuple[bool, str]:
         """
         Executa comando SSH em um node específico usando seu IP público.
         """
         try:
-            public_ip = self._get_node_public_ip(node_name)
+            public_ip = self._get_node_public_ip(node_name,show_print=show_print)
             
             ssh_cmd = [
                 'ssh', '-i', self.ssh_key,
@@ -93,7 +94,8 @@ class AWSFailureInjector:
                 command
             ]
             
-            print(f"💻 Executando SSH: {' '.join(ssh_cmd[:-1])} '{command}'")
+            if show_print:
+                print(f"💻 Executando SSH: {' '.join(ssh_cmd[:-1])} '{command}'")
             result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=timeout)
             
             # Código 0 = sucesso total
@@ -157,7 +159,7 @@ class AWSFailureInjector:
         """
         try:
             # Usar debug container para matar todos os processos
-            cmd = f"sudo kubectl exec -it {pod_name} -c debug-tools -- kill -9 -1"
+            cmd = f"sudo kubectl exec {pod_name} -c debug-tools -- sh -c 'kill -9 -1 2>/dev/null || true'"
             result = self.run_remote_command(cmd)
             
             if result.returncode == 0 or "Terminated" in result.stderr:
@@ -174,7 +176,7 @@ class AWSFailureInjector:
         """
         try:
             # Usar debug container para matar PID 1
-            cmd = f"sudo kubectl exec -it {pod_name} -c debug-tools -- kill -9 1"
+            cmd = f"sudo kubectl exec {pod_name} -c debug-tools -- sh -c 'kill -9 1 2>/dev/null || true'"
             result = self.run_remote_command(cmd)
             
             if result.returncode == 0 or "Terminated" in result.stderr:

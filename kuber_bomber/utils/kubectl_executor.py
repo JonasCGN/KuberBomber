@@ -18,6 +18,10 @@ class KubectlExecutor:
     Gerencia execução de comandos kubectl tanto localmente (com --context)
     quanto remotamente via SSH para AWS.
     """
+    # Cache para control plane (compartilhado entre instâncias)
+    _control_plane_cache = None
+    _control_plane_cache_time = None
+    _cache_duration = 60  # Cache por 60 segundos
     
     def __init__(self, aws_config: Optional[dict] = None):
         """
@@ -32,6 +36,37 @@ class KubectlExecutor:
         # Importar config aqui para evitar imports circulares
         from .config import get_config
         self.config = get_config(aws_mode=self.is_aws_mode)
+    
+    def _get_cached_control_plane(self):
+        """
+        Obtém control plane com cache para evitar descobertas repetidas.
+        
+        Returns:
+            IP do control plane ou None se não encontrado
+        """
+        import time
+        
+        # Verificar se o cache ainda é válido
+        current_time = time.time()
+        if (self._control_plane_cache is not None and 
+            self._control_plane_cache_time is not None and
+            current_time - self._control_plane_cache_time < self._cache_duration):
+            return self._control_plane_cache
+            
+        # Cache expirou ou não existe, fazer nova descoberta apenas uma vez
+        if self.aws_config:  # Verificar se aws_config existe
+            from .control_plane_discovery import ControlPlaneDiscovery
+            discovery = ControlPlaneDiscovery(self.aws_config)
+            control_plane_ip = discovery.discover_control_plane_ip()
+            
+            if control_plane_ip:
+                # Atualizar cache
+                self._control_plane_cache = control_plane_ip
+                self._control_plane_cache_time = current_time
+                
+            return control_plane_ip
+        
+        return None
     
     def execute_kubectl(self, args: List[str]) -> Dict[str, Any]:
         """
@@ -66,10 +101,8 @@ class KubectlExecutor:
         ssh_key = self.aws_config.get('ssh_key', '~/.ssh/vockey.pem')
         ssh_user = self.aws_config.get('ssh_user', 'ubuntu')
         
-        # Descobrir control plane automaticamente
-        from .control_plane_discovery import ControlPlaneDiscovery
-        discovery = ControlPlaneDiscovery(self.aws_config)
-        ssh_host = discovery.discover_control_plane_ip()
+        # Usar control plane em cache
+        ssh_host = self._get_cached_control_plane()
         
         if not ssh_host:
             return {'returncode': 1, 'stdout': '', 'stderr': 'Control plane não encontrado'}

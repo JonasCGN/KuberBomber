@@ -1741,7 +1741,7 @@ class AvailabilitySimulator:
                 else:
                     # Para outras falhas, fazer verificação combinada (running + curl)
                     print(f"  🔍 Verificando recuperação com método combinado (running + curl)...")
-                    _, recovery_time = self.health_checker.wait_for_pods_recovery_combined()
+                    _, recovery_time = self.health_checker.wait_for_pods_recovery_combined_silent()
                     next_event.component.total_downtime += recovery_time
                     print(f"  ⏱️ Tempo de recuperação (combinado): {recovery_time:.1f}s ({recovery_time/3600:.4f}h)")
                 

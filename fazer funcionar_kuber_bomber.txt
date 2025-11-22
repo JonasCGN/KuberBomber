@@ -1,0 +1,1 @@
+run_deploy_aws -> run_deploy_aplication -> install_debug_tools

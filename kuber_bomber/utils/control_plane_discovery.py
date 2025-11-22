@@ -17,6 +17,13 @@ class ControlPlaneDiscovery:
     """
     Descobre automaticamente o IP do control plane AWS usando AWS CLI.
     """
+    # Cache estático compartilhado entre instâncias
+    _instances_cache = {}
+    _instances_cache_time = None
+    _control_plane_cache = None
+    _control_plane_cache_time = None
+    _cache_duration = 60  # Cache por 60 segundos
+    _discovery_logged = False
     
     def __init__(self, aws_config: Dict):
         """
@@ -27,12 +34,10 @@ class ControlPlaneDiscovery:
         """
         self.ssh_key = aws_config.get('ssh_key', '~/.ssh/vockey.pem')
         self.ssh_user = aws_config.get('ssh_user', 'ubuntu')
-        self._instances_cache = {}  # Cache para instâncias descobertas
-        self._control_plane_ip = None  # Cache para IP do control plane
         
     def discover_control_plane_ip(self, force_refresh: bool = False) -> Optional[str]:
         """
-        Descobre o IP público do control plane automaticamente.
+        Descobre o IP público do control plane automaticamente com cache.
         
         Args:
             force_refresh: Se deve forçar nova descoberta (ignorar cache)
@@ -40,11 +45,17 @@ class ControlPlaneDiscovery:
         Returns:
             IP público do control plane ou None se não encontrado
         """
-        if self._control_plane_ip and not force_refresh:
-            return self._control_plane_ip
-            
-        print("🔍 Descobrindo control plane automaticamente...")
+        import time
         
+        # Verificar cache se não for refresh forçado
+        if not force_refresh:
+            current_time = time.time()
+            if (self._control_plane_cache is not None and 
+                self._control_plane_cache_time is not None and
+                current_time - self._control_plane_cache_time < self._cache_duration):
+                return self._control_plane_cache
+        
+        # Cache expirou ou refresh forçado, fazer nova descoberta
         try:
             # Obter todas as instâncias AWS
             cmd = [
@@ -74,8 +85,14 @@ class ControlPlaneDiscovery:
                         name_lower == 'controlplane' or name == 'ControlPlane'):
                         public_ip = instance.get('PublicIP')
                         if public_ip:
-                            self._control_plane_ip = public_ip
-                            print(f"✅ Control plane descoberto: {name} ({public_ip})")
+                            # Atualizar cache
+                            self._control_plane_cache = public_ip
+                            self._control_plane_cache_time = time.time()
+                            
+                            # Log apenas na primeira descoberta ou refresh forçado
+                            if force_refresh or not self._discovery_logged:
+                                print(f"✅ Control plane descoberto: {name} ({public_ip})")
+                            
                             return public_ip
                         
             print("❌ Control plane não encontrado ou não está rodando")
@@ -87,12 +104,18 @@ class ControlPlaneDiscovery:
     
     def get_all_aws_instances(self) -> Dict[str, Dict]:
         """
-        Obtém informações de todas as instâncias AWS.
+        Obtém informações de todas as instâncias AWS com cache.
         
         Returns:
             Dict mapeando node_name -> instance_info
         """
-        if self._instances_cache:
+        import time
+        
+        # Verificar se o cache ainda é válido
+        current_time = time.time()
+        if (self._instances_cache and 
+            self._instances_cache_time is not None and
+            current_time - self._instances_cache_time < self._cache_duration):
             return self._instances_cache
             
         try:
@@ -122,10 +145,16 @@ class ControlPlaneDiscovery:
                             node_name = f"ip-{private_ip.replace('.', '-')}"
                             instances[node_name] = instance
                             
+                # Atualizar cache
                 self._instances_cache = instances
-                print(f"🔍 Descobertas {len(instances)} instâncias AWS:")
-                for node_name, info in instances.items():
-                    print(f"  • {node_name}: {info['Name']} ({info['PublicIP']})")
+                self._instances_cache_time = current_time
+                
+                # Log apenas na primeira descoberta
+                if not self._discovery_logged:
+                    print(f"🔍 Descobertas {len(instances)} instâncias AWS:")
+                    for node_name, info in instances.items():
+                        print(f"  • {node_name}: {info['Name']} ({info['PublicIP']})")
+                    self._discovery_logged = True
                     
                 return instances
             else:
