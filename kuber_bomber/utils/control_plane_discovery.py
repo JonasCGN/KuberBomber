@@ -133,7 +133,9 @@ class ControlPlaneDiscovery:
                 instances = {}
                 
                 for instance in instances_data:
-                    if instance.get('State') == 'running' and instance.get('Name'):
+                    # Incluir instâncias running, stopped e stopping para permitir start/restart
+                    valid_states = ['running', 'stopped', 'stopping']
+                    if instance.get('State') in valid_states and instance.get('Name'):
                         name = instance['Name']
                         private_ip = instance['PrivateIP']
                         

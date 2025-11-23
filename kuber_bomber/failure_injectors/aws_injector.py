@@ -300,14 +300,30 @@ class AWSFailureInjector:
         """
         print(f"⛔ EXECUTANDO: shutdown worker node {node_name}")
         
+        # Obter ID da instância antes do shutdown
+        instances = self.discovery.get_all_aws_instances()
+        
+        if node_name not in instances:
+            return False, f"shutdown_worker_node {node_name} (instance not found)"
+        
+        instance_id = instances[node_name]['ID']
+        
         # Comando para desligar o worker node
         command = "sudo -n shutdown -h now"
         
         success, output = self._execute_ssh_command(node_name, command, timeout=30)
         
         if success or "connection closed" in output.lower():
-            print(f"✅ Worker node {node_name} desligado completamente")
-            return True, f"shutdown_worker_node {node_name}"
+            print(f"✅ Worker node {node_name} desligado via SSH")
+            
+            # AGUARDAR o estado AWS refletir a mudança para 'stopped'
+            print(f"⏱️ Aguardando instância {instance_id} ficar 'stopped' na AWS...")
+            if self._wait_for_instance_state(instance_id, "stopped", timeout=120):
+                print(f"✅ Worker node {node_name} confirmado como 'stopped' na AWS")
+                return True, f"shutdown_worker_node {node_name}"
+            else:
+                print(f"⚠️ Timeout aguardando estado 'stopped' - continuando mesmo assim")
+                return True, f"shutdown_worker_node {node_name} (timeout but likely stopped)"
         else:
             print(f"❌ Erro ao desligar {node_name}: {output}")
             return False, f"shutdown_worker_node {node_name} (failed)"
@@ -325,19 +341,33 @@ class AWSFailureInjector:
         print(f"▶️ EXECUTANDO: start worker node {node_name}")
         
         try:
-            # Obter ID da instância a partir do nome
-            instances = self._get_aws_instances()
+            # Forçar refresh do cache para obter estado atual
+            self.discovery.refresh_cache()
+            
+            # Obter informações atualizadas de todas as instâncias
+            instances = self.discovery.get_all_aws_instances()
             
             if node_name not in instances:
                 return False, f"start_worker_node {node_name} (instance not found)"
             
-            instance_id = instances[node_name]['ID']
+            instance_info = instances[node_name]
+            instance_id = instance_info['ID']
+            current_state = instance_info['State']
             
-            # CORREÇÃO: Aguardar instância ficar "stopped" antes de tentar ligar
-            print(f"⏱️ Aguardando instância {instance_id} ficar 'stopped'...")
-            if not self._wait_for_instance_state(instance_id, "stopped", timeout=60):
-                print(f"⚠️ Instância {instance_id} não ficou 'stopped' no timeout esperado")
-                # Continuar tentando mesmo assim
+            print(f"💡 Estado atual da instância {instance_id}: {current_state}")
+            
+            # Verificar estado atual antes de tentar iniciar
+            if current_state == 'running':
+                print(f"✅ Instância {node_name} ({instance_id}) já está rodando")
+                return True, f"start_worker_node {node_name} (already running)"
+            elif current_state in ['stopping', 'pending']:
+                print(f"⏳ Instância {node_name} ({instance_id}) em estado transitório ({current_state})")
+                # Aguardar estado estável antes de iniciar
+                print(f"⏱️ Aguardando estado estável...")
+                self._wait_for_instance_state(instance_id, "stopped", timeout=60)
+            elif current_state != 'stopped':
+                print(f"⚠️ Instância {node_name} ({instance_id}) em estado inválido para inicialização: {current_state}")
+                return False, f"start_worker_node {node_name} (invalid state: {current_state})"
             
             # Comando para iniciar a instância via AWS CLI
             cmd = ['aws', 'ec2', 'start-instances', '--instance-ids', instance_id]
@@ -579,15 +609,31 @@ class AWSFailureInjector:
         try:
             print(f"▶️ Ligando control plane {node_name}...")
             
+            # IMPORTANTE: Limpar cache antes de obter instâncias para garantir estado atualizado
+            self.discovery.refresh_cache()
+            
             # Obter informações da instância
             instances = self._get_aws_instances()
             
             if node_name not in instances:
                 print(f"❌ Control plane {node_name} não encontrado")
                 return False, f"start_control_plane {node_name}"
-            
+
             instance = instances[node_name]
             instance_id = instance['ID']
+            current_state = instance['State']
+            
+            # Verificar se já está running
+            if current_state == 'running':
+                print(f"✅ Control plane {node_name} já está em execução (estado: {current_state})")
+                return True, f"start_control_plane {node_name} (already running)"
+            
+            # Verificar se está em estado válido para start
+            if current_state not in ['stopped', 'stopping']:
+                print(f"⚠️ Control plane {node_name} está em estado '{current_state}' - não é possível ligar")
+                return False, f"start_control_plane {node_name} (invalid state: {current_state})"
+            
+            print(f"📊 Estado atual: {current_state} - procedendo com o startup...")
             
             # Iniciar a instância AWS
             cmd = ['aws', 'ec2', 'start-instances', '--instance-ids', instance_id]
