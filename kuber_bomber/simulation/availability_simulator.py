@@ -401,7 +401,7 @@ class AvailabilitySimulator:
         discovered_urls = {}
         
         try:
-            # Descobrir serviços LoadBalancer e NodePort
+            # Descobrir serviços LoadBalancer
             result = self.kubectl.execute_kubectl(['get', 'services', '-o', 'json'])
             
             if not result['success']:
@@ -420,46 +420,14 @@ class AvailabilitySimulator:
                 
                 service_urls = {}
                 
-                if service_type == 'NodePort':
-                    # NodePort - pegar IP do primeiro node disponível
-                    node_result = self.kubectl.execute_kubectl([
-                        'get', 'nodes', '-o', 'json'
-                    ])
-                    
-                    if node_result['success']:
-                        nodes_data = json.loads(node_result['output'])
-                        
-                        # Pegar IP do primeiro node disponível
-                        node_ip = None
-                        for node in nodes_data.get('items', []):
-                            addresses = node['status'].get('addresses', [])
-                            for addr in addresses:
-                                if addr['type'] in ['InternalIP', 'ExternalIP']:
-                                    node_ip = addr['address']
-                                    break
-                            if node_ip:
-                                break
-                        
-                        if node_ip:
-                            ports = service['spec'].get('ports', [])
-                            for port in ports:
-                                node_port = port.get('nodePort')
-                                
-                                if node_port:
-                                    base_name = service_name.replace('-nodeport', '').replace('-service', '').replace('-svc', '')
-                                    endpoint = f"/{base_name}"
-                                    url = f"http://{node_ip}:{node_port}{endpoint}"
-                                    
-                                    service_urls['NodePort'] = url
-                                    print(f"  🌐 {service_name} (NodePort): {url}")
-                                    break
+
                 
                 if service_urls:
                     discovered_urls[service_name] = service_urls
-                    discovered_urls[service_name] = service_urls
-                    url_type = 'LoadBalancer' if 'loadbalancer_url' in service_urls else 'NodePort'
-                    main_url = service_urls.get('loadbalancer_url') or service_urls.get('nodeport_url')
-                    print(f"  🌐 {service_name} ({url_type}): {main_url}")
+                    url_type = 'LoadBalancer'
+                    main_url = service_urls.get('loadbalancer_url')
+                    if main_url:
+                        print(f"  🌐 {service_name} ({url_type}): {main_url}")
             
             # Tentar descobrir Ingress também
             try:

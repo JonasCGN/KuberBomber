@@ -404,7 +404,7 @@ class ReliabilityTester:
             print("   3. Ou execute o script port-forward-monitor.sh")
         else:
             print("   2. Verifique se as aplicações estão acessíveis via IP público")
-            print("   3. Verifique se os serviços NodePort estão configurados")
+            print("   3. Verifique se os serviços LoadBalancer estão configurados")
         print("\n🔧 Deseja continuar mesmo assim? (y/N):")
         
         try:
@@ -534,8 +534,8 @@ class ReliabilityTester:
                                 else:
                                     emoji = "❓"
                                 
-                                # Mostrar apenas pods das apps principais
-                                if any(app in pod_name for app in ['bar-app', 'foo-app', 'test-app']):
+                                # Mostrar apenas pods das aplicações (que contêm -app-)
+                                if '-app-' in pod_name:
                                     print(f"   {emoji} {pod_name}: {pod_phase} ({ready_status})")
                 else:
                     print("   ❌ Erro ao verificar pods via SSH")
@@ -691,28 +691,10 @@ class ReliabilityTester:
             if not node_ready:
                 print(f"⚠️ Node {target} não ficou Ready no tempo esperado")
             
-            # 7. CORREÇÃO: Aguardar aplicações ficarem ativas com health checker
-            print(f"⚕️ Aguardando aplicações ficarem ativas com health checker...")
-            health_check_start = time.time()
-            
-            # Usar health checker para verificar recuperação real (mas não contabilizar o tempo)
-            apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
-                timeout=self.config.current_recovery_timeout,
-                discovered_apps=getattr(self, 'discovered_apps', None)
-            )
-            
-            if apps_recovered:
-                print(f"✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
-                # CORREÇÃO: Retornar apenas o MTTR configurado, não somar tempos reais
-                mttr_seconds = mttr_hours * 3600
-                print(f"📊 Retornando MTTR configurado: {mttr_seconds:.1f}s (não contabilizando tempo real de {health_check_time:.1f}s)")
-                return True, f"shutdown_worker_node {target} (recovered, MTTR: {mttr_seconds:.1f}s)"
-            else:
-                print(f"⚠️ Aplicações não ficaram ativas no timeout configurado ({self.config.current_recovery_timeout}s)")
-                # Mesmo assim, retornar MTTR configurado 
-                mttr_seconds = mttr_hours * 3600
-                print(f"📊 Retornando MTTR configurado mesmo com recovery parcial: {mttr_seconds:.1f}s")
-                return True, f"shutdown_worker_node {target} (partial-recovery, MTTR: {mttr_seconds:.1f}s)"
+            # 7. Para reliability tester: Retornar sucesso sem aguardar aplicações
+            # (O loop principal fará a verificação de recuperação)
+            print(f"✅ Worker node {target} shutdown/restart concluído com sucesso")
+            return True, f"shutdown_worker_node {target} (completed)"
                 
         except Exception as e:
             print(f"❌ Erro durante shutdown/recovery de {target}: {e}")
@@ -954,27 +936,10 @@ class ReliabilityTester:
             if not node_ready:
                 print(f"⚠️ Control plane {target} não ficou Ready no tempo esperado")
             
-            # 7. CORREÇÃO: Aguardar aplicações ficarem ativas com health checker
-            print(f"⚕️ Aguardando aplicações ficarem ativas com health checker...")
-            
-            # Usar health checker para verificar recuperação real (mas não contabilizar o tempo)
-            apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
-                timeout=self.config.current_recovery_timeout,
-                discovered_apps=getattr(self, 'discovered_apps', None)
-            )
-            
-            if apps_recovered:
-                print(f"✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
-                # CORREÇÃO: Retornar apenas o MTTR configurado, não somar tempos reais
-                mttr_seconds = mttr_hours * 3600
-                print(f"📊 Retornando MTTR configurado: {mttr_seconds:.1f}s (não contabilizando tempo real de {health_check_time:.1f}s)")
-                return True, f"shutdown_control_plane {target} (recovered, MTTR: {mttr_seconds:.1f}s)"
-            else:
-                print(f"⚠️ Aplicações não ficaram ativas no timeout configurado ({self.config.current_recovery_timeout}s)")
-                # Mesmo assim, retornar MTTR configurado 
-                mttr_seconds = mttr_hours * 3600
-                print(f"📊 Retornando MTTR configurado mesmo com recovery parcial: {mttr_seconds:.1f}s")
-                return True, f"shutdown_control_plane {target} (partial-recovery, MTTR: {mttr_seconds:.1f}s)"
+            # 7. Para reliability tester: Retornar sucesso sem aguardar aplicações
+            # (O loop principal fará a verificação de recuperação)
+            print(f"✅ Control plane {target} shutdown/restart concluído com sucesso")
+            return True, f"shutdown_control_plane {target} (completed)"
                 
         except Exception as e:
             print(f"❌ Erro durante shutdown/recovery de control plane {target}: {e}")

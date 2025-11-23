@@ -141,9 +141,6 @@ class HealthChecker:
         elif 'loadbalancer_url' in discovered_urls:
             url = discovered_urls['loadbalancer_url']
             url_type = "LoadBalancer"
-        elif 'nodeport_url' in discovered_urls:
-            url = discovered_urls['nodeport_url']
-            url_type = "NodePort"
         else:
             # Se chegou aqui, só tem configuração hardcoded no config (fallback legacy)
             if self.config.services:
@@ -253,7 +250,8 @@ class HealthChecker:
         
         # Se estamos em modo AWS, usar lista conhecida de aplicações
         if self.is_aws_mode:
-            aws_apps = ['bar-app', 'foo-app', 'test-app']  # Aplicações conhecidas no AWS
+            # Descobrir aplicações dinamicamente via kubectl
+            aws_apps = self._discover_app_names()
             if verbose:
                 print(f"📱 Testando aplicações AWS via control plane: {aws_apps}")
             
@@ -263,43 +261,46 @@ class HealthChecker:
                 results[app] = self.check_application_health(app, verbose=verbose)
             
             return results
+    
+    def _discover_app_names(self) -> List[str]:
+        """
+        Descobre dinamicamente nomes de aplicações baseado nos pods em execução.
+        Procura por pods que terminam com padrões de aplicação.
         
-        # Se temos aplicações descobertas, usar elas
-        if discovered_apps:
-            for app in discovered_apps:
-                results[app] = self.check_application_health(app, verbose, use_ingress)
-        # Senão, tentar usar as configuradas (fallback)
-        elif self.config.services:
-            for service in self.config.services.keys():
-                results[service] = self.check_application_health(service, verbose, use_ingress)
-        else:
-            # Se não tem nada configurado, descobrir automaticamente
-            try:
-                from kuber_bomber.simulation.availability_simulator import AvailabilitySimulator
+        Returns:
+            Lista com nomes das aplicações descobertas
+        """
+        try:
+            result = self.kubectl.execute_kubectl(['get', 'pods', '-o', 'json'])
+            
+            if not result['success']:
+                print(f"⚠️ Erro ao descobrir aplicações: {result.get('error', 'Unknown error')}")
+                return []
+            
+            import json
+            pods_data = json.loads(result['output'])
+            app_names = set()
+            
+            # Procurar pods que seguem padrão nome-app-*
+            for pod in pods_data.get('items', []):
+                pod_name = pod['metadata']['name']
                 
-                # Usar cache se disponível
-                if HealthChecker._discovered_apps_cache is not None:
-                    discovered_apps = HealthChecker._discovered_apps_cache
-                else:
-                    simulator = AvailabilitySimulator(aws_config=self.aws_config)
-                    info = simulator.get_discovered_components_info()
-                    discovered_apps = [pod.name for pod in info['pods']]
-                    HealthChecker._discovered_apps_cache = discovered_apps
-                
-                if discovered_apps:
-                    if verbose and not HealthChecker._discovery_logged:
-                        print(f"🔍 Descobertas {len(discovered_apps)} aplicações automaticamente")
-                        HealthChecker._discovery_logged = True
-                    for app in discovered_apps:
-                        results[app] = self.check_application_health(app, verbose, use_ingress)
-                else:
-                    if verbose:
-                        print("❌ Nenhuma aplicação descoberta no cluster")
-            except Exception as e:
-                if verbose:
-                    print(f"❌ Erro ao descobrir aplicações: {e}")
+                # Procurar por pods que têm padrão app-name-hash-hash
+                if '-app-' in pod_name:
+                    # Extrair nome da aplicação: foo-app-69bc4fffc-b82p9 -> foo-app
+                    parts = pod_name.split('-')
+                    for i, part in enumerate(parts):
+                        if part == 'app' and i > 0:
+                            app_name = '-'.join(parts[:i+1])  # foo-app
+                            app_names.add(app_name)
+                            break
+            
+            return sorted(list(app_names))
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao descobrir aplicações: {e}")
+            return []
         
-        return results
     
     def check_port_forwards(self):
         """Verifica se os port-forwards estão ativos."""
@@ -540,7 +541,7 @@ class HealthChecker:
         Obtém pods filtrados pelo prefixo do nome (fallback quando label não funciona).
         
         Args:
-            app_name: Nome da aplicação (ex: 'bar-app', 'foo-app', 'test-app')
+            app_name: Nome da aplicação (ex: 'myapp-app')
             
         Returns:
             Lista de pods com informações básicas
@@ -628,7 +629,7 @@ class HealthChecker:
         Descobre URLs de um serviço específico dinamicamente.
         
         Args:
-            service_name: Nome do serviço (ex: 'foo-app', 'bar-app')
+            service_name: Nome do serviço (ex: 'myapp-app')
             
         Returns:
             Dict com URLs descobertas
@@ -649,14 +650,12 @@ class HealthChecker:
                 svc_name = service['metadata']['name']
                 
                 # Verificar se o serviço corresponde ao app
-                # foo-app -> foo-loadbalancer, foo-service, foo-service-nodeport
-                # bar-app -> bar-loadbalancer, bar-service, bar-service-nodeport  
-                # test-app -> test-loadbalancer, test-service, test-service-nodeport
+                # app-name -> app-loadbalancer, app-service
+                # Exemplo: foo-app -> foo-loadbalancer, foo-service
                 app_base = service_name.replace('-app', '')  # foo-app -> foo
                 
                 if (svc_name == f"{app_base}-loadbalancer" or 
                     svc_name == f"{app_base}-service" or
-                    svc_name == f"{app_base}-service-nodeport" or
                     svc_name.startswith(f"{app_base}-")):
                     
                     # LoadBalancer
@@ -669,20 +668,7 @@ class HealthChecker:
                             # Inferir endpoint baseado no nome do app
                             endpoint = f"/{app_base}"  # /foo, /bar, /test
                             discovered_urls['loadbalancer_url'] = f"http://{ip}:{port}{endpoint}"
-                    
-                    # NodePort
-                    elif service['spec'].get('type') == 'NodePort':
-                        node_port = service['spec']['ports'][0]['nodePort']
-                        # Obter IP de qualquer nó
-                        nodes_result = self.kubectl.execute_kubectl([
-                            'get', 'nodes',
-                            '-o', 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}'
-                        ])
-                        
-                        if nodes_result['success'] and nodes_result['output'].strip():
-                            node_ip = nodes_result['output'].strip()
-                            endpoint = f"/{app_base}"  # /foo, /bar, /test  
-                            discovered_urls['nodeport_url'] = f"http://{node_ip}:{node_port}{endpoint}"
+
             
             # 2. Descobrir Ingress
             try:
@@ -724,10 +710,10 @@ class HealthChecker:
     
     def _check_aws_application_health(self, service: str, verbose: bool = True) -> Dict:
         """
-        Verifica saúde de aplicação AWS usando descoberta automática de NodePort.
+        Verifica saúde de aplicação AWS usando descoberta automática de serviços.
         
         Args:
-            service: Nome do serviço (foo-app, bar-app, test-app)
+            service: Nome do serviço (ex: myapp-app)
             verbose: Se deve imprimir mensagens detalhadas
             
         Returns:
@@ -744,12 +730,11 @@ class HealthChecker:
                 'url_type': 'Config Missing'
             }
         
-        # Descobrir NodePort automaticamente via kubectl get svc
-        app_base = service.replace('-app', '')  # foo-app -> foo
-        service_name = f"{app_base}-service-nodeport"
+        # Descobrir serviços LoadBalancer automaticamente via kubectl get svc
+        app_base = service.replace('-app', '')  # myapp-app -> myapp
         
         try:
-            # Obter informações de TODOS os serviços NodePort
+            # Obter informações de TODOS os serviços LoadBalancer
             result = self.kubectl.execute_kubectl([
                 'get', 'svc', 
                 '-o', 'json'
@@ -768,41 +753,45 @@ class HealthChecker:
                 }
             
             services_data = json.loads(result['output'])
-            node_port = None
+            loadbalancer_url = None
             
-            # Procurar o serviço NodePort correto
+            # Procurar serviços LoadBalancer
             for svc in services_data.get('items', []):
                 svc_name = svc['metadata']['name']
                 svc_type = svc['spec'].get('type', '')
                 
-                # Verificar se é o serviço NodePort que queremos
-                if svc_name == service_name and svc_type == 'NodePort':
-                    ports = svc['spec'].get('ports', [])
-                    if ports:
-                        node_port = ports[0].get('nodePort')
-                        break
+                # Verificar se é um serviço LoadBalancer para nossa aplicação
+                if (svc_name.startswith(f"{app_base}-") and svc_type == 'LoadBalancer'):
+                    ingress = svc['status'].get('loadBalancer', {}).get('ingress', [])
+                    if ingress and ingress[0].get('ip'):
+                        lb_ip = ingress[0]['ip']
+                        ports = svc['spec'].get('ports', [])
+                        if ports:
+                            lb_port = ports[0].get('port', 80)
+                            endpoint = f"/{app_base}"  # /foo, /bar, /test
+                            loadbalancer_url = f"http://{lb_ip}:{lb_port}{endpoint}"
+                            break
             
-            if not node_port:
+            if not loadbalancer_url:
                 if verbose:
-                    print(f"❌ NodePort não encontrado para {service_name}")
+                    print(f"❌ LoadBalancer não encontrado para {app_base}-*")
                 return {
                     'healthy': False,
-                    'error': f'NodePort não encontrado para {service_name}',
+                    'error': f'LoadBalancer não encontrado para {app_base}-*',
                     'status_code': None,
                     'response_time': None,
                     'url': None,
-                    'url_type': 'NodePort Missing'
+                    'url_type': 'LoadBalancer Missing'
                 }
             
-            # Obter IP do control plane (nós vamos fazer curl LOCAL no control plane)
+            # Usar a URL do LoadBalancer descoberta
             ssh_host = self.aws_config['ssh_host']
-            endpoint = f"/{app_base}"  # /foo, /bar, /test
             
-            # OPÇÃO 1: Tentar localhost no control plane
-            local_url = f"http://localhost:{node_port}{endpoint}"
+            # Usar a URL do LoadBalancer descoberta
+            test_url = loadbalancer_url
             
             if verbose:
-                print(f"🌐 Verificando {service} via control plane: {local_url}")
+                print(f"🌐 Verificando {service} via LoadBalancer: {test_url}")
             
             # Usar aws_injector para executar curl no control plane
             from ..failure_injectors.aws_injector import AWSFailureInjector
@@ -816,7 +805,7 @@ class HealthChecker:
             )
             
             # Executar curl no control plane via SSH usando aws_injector
-            curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{local_url}'"
+            curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{test_url}'"
             
             instances = aws_injector._get_aws_instances()
             
@@ -831,8 +820,8 @@ class HealthChecker:
                     'healthy': False,
                     'response_time': None,
                     'error': 'ControlPlane instance not found',
-                    'url': local_url,
-                    'url_type': "Control Plane NodePort"
+                    'url': test_url,
+                    'url_type': "LoadBalancer via Control Plane"
                 }
 
             node_name = control_plane_node
@@ -840,12 +829,18 @@ class HealthChecker:
             curl_result = aws_injector._execute_ssh_command(control_plane_node, curl_cmd, timeout=15)
             
             if not curl_result[0]:
-                # Se localhost não funcionar, tentar com IP interno do node
+                # Se não conseguir acessar o LoadBalancer, retornar erro
                 if verbose:
-                    print(f"⚠️ localhost falhou, tentando via IP interno...")
+                    print(f"⚠️ LoadBalancer não acessível via control plane")
                 
-                # Tentar descobrir IP interno do node onde o pod está rodando
-                return self._check_aws_application_health_via_node_ip(service, node_port, verbose)
+                return {
+                    'healthy': False,
+                    'error': f'LoadBalancer não acessível: {curl_result[1] if curl_result[1] else "Connection failed"}',
+                    'status_code': None,
+                    'response_time': None,
+                    'url': test_url,
+                    'url_type': 'LoadBalancer via Control Plane'
+                }
             
             # Parse da resposta do curl: "200 0.123456"
             output_parts = curl_result[1].strip().split() if curl_result[1] else []
@@ -871,16 +866,16 @@ class HealthChecker:
                         'status_code': status_code,
                         'response_time': response_time,
                         'error': f'HTTP {status_code}',
-                        'url': local_url,
-                        'url_type': "Control Plane NodePort"
+                        'url': test_url,
+                        'url_type': "LoadBalancer via Control Plane"
                     }
             else:
                 return {
                     'healthy': False,
                     'response_time': None,
                     'error': 'Invalid curl response',
-                    'url': local_url,
-                    'url_type': "Control Plane NodePort"
+                    'url': test_url,
+                    'url_type': "LoadBalancer via Control Plane"
                 }
                 
         except subprocess.TimeoutExpired:
@@ -904,264 +899,18 @@ class HealthChecker:
                 'url_type': "Control Plane NodePort"
             }
     
-    def _check_aws_application_health_via_node_ip(self, service: str, node_port: int, verbose: bool = True) -> Dict:
-        """
-        Tenta verificar aplicação via IP interno do node onde o pod está rodando.
-        
-        Args:
-            service: Nome do serviço
-            node_port: Porta NodePort descoberta
-            verbose: Se deve imprimir mensagens
-            
-        Returns:
-            Dict com status da verificação
-        """
-        try:
-            app_base = service.replace('-app', '')
-            endpoint = f"/{app_base}"
-            
-            # Descobrir em qual node o pod está rodando
-            result = self.kubectl.execute_kubectl([
-                'get', 'pods', 
-                '-o', 'json'
-            ])
-            
-            if not result['success']:
-                return self._check_aws_application_health_fallback(service, verbose)
-            
-            pods_data = json.loads(result['output'])
-            node_ip = None
-            
-            # Procurar o pod da aplicação e pegar o node IP
-            for pod in pods_data.get('items', []):
-                pod_name = pod['metadata']['name']
-                if pod_name.startswith(service.replace('-app', '-')):  # foo-app -> foo-
-                    node_name = pod['spec'].get('nodeName')
-                    if node_name:
-                        # Pegar IP interno do node
-                        node_result = self.kubectl.execute_kubectl([
-                            'get', 'node', node_name,
-                            '-o', 'jsonpath={.status.addresses[?(@.type=="InternalIP")].address}'
-                        ])
-                        if node_result['success'] and node_result['output'].strip():
-                            node_ip = node_result['output'].strip()
-                            break
-            
-            if not node_ip:
-                if verbose:
-                    print(f"❌ IP do node não encontrado para {service}")
-                return self._check_aws_application_health_fallback(service, verbose)
-            
-            # URL usando IP interno do node
-            node_url = f"http://{node_ip}:{node_port}{endpoint}"
-
-            if verbose:
-                print(f"🌐 Verificando {service} via node IP: {node_url}")
-            
-            # Executar curl no control plane via SSH usando discovery automático
-            curl_cmd = f"curl -sS -o /dev/null -w '%{{http_code}} %{{time_total}}' --max-time 5 '{node_url}'"
-            
-            # Usar aws_injector existente para executar comando
-            if hasattr(self, 'aws_injector') and self.aws_injector:
-                # Usar aws_injector para executar comando no control plane
-                result = self.aws_injector.run_remote_command(curl_cmd)
-            else:
-                # Fallback: usar control plane em cache
-                control_plane_ip = self._get_cached_control_plane(verbose=False)
-                
-                if not control_plane_ip:
-                    if verbose:
-                        print(f"❌ Não foi possível descobrir control plane")
-                    return self._check_aws_application_health_fallback(service, verbose)
-                
-                ssh_key = self.aws_config['ssh_key']
-                ssh_user = self.aws_config['ssh_user']
-                
-                ssh_cmd = [
-                    'ssh', '-i', ssh_key,
-                    '-o', 'StrictHostKeyChecking=no',
-                    '-o', 'ConnectTimeout=10',
-                    f"{ssh_user}@{control_plane_ip}",
-                    curl_cmd
-                ]
-                
-                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
-            
-            if result.returncode != 0:
-                err = result.stderr.strip() or 'SSH/curl failed'
-                if verbose:
-                    print(f"❌ {service} (via node IP): {err}")
-                return self._check_aws_application_health_fallback(service, verbose)
-            
-            # Parse da resposta do curl: "200 0.123456"
-            output_parts = result.stdout.strip().split()
-            if len(output_parts) >= 2:
-                status_code = int(output_parts[0])
-                response_time = float(output_parts[1])
-                
-                if status_code == 200:
-                    if verbose:
-                        print(f"✅ {service}: OK ({response_time:.3f}s) via node IP")
-                    return {
-                        'healthy': True,
-                        'status_code': status_code,
-                        'response_time': response_time,
-                        'url': node_url,
-                        'url_type': "Node IP NodePort"
-                    }
-                else:
-                    if verbose:
-                        print(f"⚠️ {service}: HTTP {status_code} ({response_time:.3f}s) via node IP")
-                    return {
-                        'healthy': False,
-                        'status_code': status_code,
-                        'response_time': response_time,
-                        'error': f'HTTP {status_code}',
-                        'url': node_url,
-                        'url_type': "Node IP NodePort"
-                    }
-            else:
-                return {
-                    'healthy': False,
-                    'response_time': None,
-                    'error': 'Invalid curl response',
-                    'url': node_url,
-                    'url_type': "Node IP NodePort"
-                }
-                
-        except Exception as e:
-            if verbose:
-                print(f"❌ {service} (via node IP): {e}")
-            return self._check_aws_application_health_fallback(service, verbose)
-    
     def _check_aws_application_health_fallback(self, service: str, verbose: bool = True) -> Dict:
         """
-        Fallback para verificação AWS usando configuração hardcoded apenas para NodePorts conhecidos.
+        Fallback para verificação AWS - retorna erro pois NodePort foi removido.
         """
-        # OBRIGATÓRIO: usar aws_config.json - SEM configuração hardcoded!
-        if not self.aws_config:
-            return {
-                'healthy': False,
-                'error': 'AWS config obrigatório! Carregue aws_config.json',
-                'status_code': None,
-                'response_time': None,
-                'url': None,
-                'url_type': 'Config Missing'
-            }
-        
-        # Mapear nome do serviço para NodePort conhecido (fallback final)
-        app_name = service.replace('-app', '')  # foo-app -> foo
-        
-        # NodePorts padrão das aplicações AWS (apenas como fallback)
-        app_configs = {
-            'foo': {'port': 30081, 'path': '/foo'},
-            'bar': {'port': 30082, 'path': '/bar'}, 
-            'test': {'port': 30083, 'path': '/test'}
+        return {
+            'healthy': False,
+            'error': 'NodePort support removed - use LoadBalancer services only',
+            'status_code': None,
+            'response_time': None,
+            'url': None,
+            'url_type': 'NodePort Deprecated'
         }
-        
-        if app_name not in app_configs:
-            return {
-                'healthy': False,
-                'error': f'Aplicação {app_name} não configurada para AWS',
-                'status_code': None,
-                'response_time': None,
-                'url': None,
-                'url_type': 'Não configurado'
-            }
-        
-        config = app_configs[app_name]
-        
-        # Usar control plane em cache para fallback
-        host = self._get_cached_control_plane(verbose=False)
-        
-        if not host:
-            return {
-                'healthy': False,
-                'error': 'Control plane não encontrado para fallback',
-                'status_code': None,
-                'response_time': None,
-                'url': None,
-                'url_type': 'Control plane missing'
-            }
-        
-        url = f"http://{host}:{config['port']}{config['path']}"
-        
-        if verbose:
-            print(f"🌐 Verificando {service} (fallback hardcoded): {url}")
-        
-        # Usar curl para medir status e tempo total
-        try:
-            result = subprocess.run(
-                ['curl', '-sS', '-o', '/dev/null', '-w', '%{http_code} %{time_total}', '--max-time', '5', url],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                if verbose:
-                    err = result.stderr.strip() or 'curl failed'
-                    print(f"❌ {service}: {err}")
-                return {
-                    'healthy': False,
-                    'response_time': None,
-                    'error': (result.stderr.strip() or 'curl failed'),
-                    'url': url,
-                    'url_type': "AWS NodePort (fallback)"
-                }
-            
-            # Parse da resposta do curl: "200 0.123456"
-            output_parts = result.stdout.strip().split()
-            if len(output_parts) >= 2:
-                status_code = int(output_parts[0])
-                response_time = float(output_parts[1])
-                
-                if status_code == 200:
-                    if verbose:
-                        print(f"✅ {service}: OK ({response_time:.3f}s)")
-                    return {
-                        'healthy': True,
-                        'status_code': status_code,
-                        'response_time': response_time,
-                        'url': url,
-                        'url_type': "AWS NodePort (fallback)"
-                    }
-                else:
-                    if verbose:
-                        print(f"⚠️ {service}: HTTP {status_code} ({response_time:.3f}s)")
-                    return {
-                        'healthy': False,
-                        'status_code': status_code,
-                        'response_time': response_time,
-                        'error': f'HTTP {status_code}',
-                        'url': url,
-                        'url_type': "AWS NodePort (fallback)"
-                    }
-            else:
-                return {
-                    'healthy': False,
-                    'response_time': None,
-                    'error': 'Invalid curl response',
-                    'url': url,
-                    'url_type': "AWS NodePort (fallback)"
-                }
-        except subprocess.TimeoutExpired:
-            if verbose:
-                print(f"❌ {service}: curl timeout")
-            return {
-                'healthy': False,
-                'response_time': None,
-                'error': 'curl timeout',
-                'url': url,
-                'url_type': "AWS NodePort (fallback)"
-            }
-        except Exception as e:
-            if verbose:
-                print(f"❌ {service}: {e}")
-            return {
-                'healthy': False,
-                'response_time': None,
-                'error': str(e),
-                'url': url,
-                'url_type': "AWS NodePort (fallback)"
-            }
             
     def check_pods_running_status(self, verbose: bool = True) -> Tuple[bool, Dict]:
         """
@@ -1503,7 +1252,7 @@ class HealthChecker:
     
     def check_pods_combined_silent(self, timeout: int = 5) -> Tuple[bool, Dict]:
         """
-        Versão silenciosa da verificação combinada - apenas tabela resumo.
+        Versão silenciosa da verificação combinada - aguarda kubectl funcionar primeiro.
         
         Args:
             timeout: Timeout em segundos para a verificação
@@ -1513,6 +1262,11 @@ class HealthChecker:
         """
         # Verificar status Running (silenciosamente)
         all_running, running_details = self.check_pods_running_status(verbose=False)
+        
+        # Se kubectl não está funcionando, retornar falha
+        if not running_details:
+            print("❌ Kubectl indisponível - aguardando recuperação...")
+            return False, {}
         
         # Verificar curl (silenciosamente) 
         all_responding, curl_details = self.check_pods_via_curl(verbose=False)
@@ -1583,6 +1337,7 @@ class HealthChecker:
     def wait_for_pods_recovery_combined_silent(self, timeout: Optional[int] = None) -> Tuple[bool, float]:
         """
         Versão silenciosa da espera por recuperação combinada.
+        Aguarda o kubectl voltar a funcionar primeiro, depois verifica pods.
         
         Args:
             timeout: Timeout específico em segundos. Se None, usa o timeout global.
@@ -1599,6 +1354,7 @@ class HealthChecker:
         
         start_time = time.time()
         check_count = 0
+        kubectl_working = False
         
         while time.time() - start_time < timeout:
             elapsed = time.time() - start_time
@@ -1606,10 +1362,25 @@ class HealthChecker:
             
             print(f"\\n🔍 Verificação #{check_count} ({elapsed:.1f}s/{timeout}s)")
             
+            # Se kubectl não está funcionando, mostrar status especial
+            if not kubectl_working:
+                # Testar se kubectl está funcionando
+                result = self.kubectl.execute_kubectl(['get', 'pods', '-o', 'json'])
+                
+                if not result['success']:
+                    print(f"⚠️ Kubectl indisponível: {result.get('error', 'Connection refused')}")
+                    print("📊 Aguardando kubectl voltar a funcionar...")
+                    print(f"⏸️ Aguardando {self.config.health_check_interval}s...")
+                    time.sleep(self.config.health_check_interval)
+                    continue
+                else:
+                    kubectl_working = True
+                    print("✅ Kubectl voltou a funcionar!")
+            
             # Verificar pods de forma combinada e silenciosa
             all_healthy, pod_details = self.check_pods_combined_silent()
             
-            if all_healthy:
+            if all_healthy and pod_details:  # Garantir que há pods para verificar
                 recovery_time = time.time() - start_time
                 print(f"\\n✅ Recuperação completa em {recovery_time:.2f}s")
                 return True, recovery_time

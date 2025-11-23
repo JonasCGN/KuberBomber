@@ -1,16 +1,7 @@
-- Fazer metodo shutdown control-plane - CERTO
-
-Criar um README configuracoes inicias e como usar e valores padrao caso nao ache  - CERTO
-
--> Chama get-config -> Fazer o teste(get-config-all)(Pegar os mttrs) -> get de disponibilidade  - CERTO
-
--> Criar uma classe exemplo (Vai ter so os metodos acima)  - CERTO
-
-
 ---------------------------------------------------------------------
 
 - 5 Interações
 
-- Verificar com pods via running e curl (os dois)
+- Verificar com pods via running e curl (os dois) - Certo
 
 ---------------------------------------------------------------------
