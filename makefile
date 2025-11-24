@@ -75,19 +75,21 @@ run_all_failures_aws:
 # 	@echo "🎛️  ===== TESTES DE CONTROL PLANE AWS ====="
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_control_plane_processes --target ip-10-0-0-219 --iterations 10 --interval 5 --aws
 # 	@echo ""
-# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method shutdown_control_plane --target ip-10-0-0-219 --iterations 10 --interval 5 --aws
-# 	@echo ""
-	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target ip-10-0-0-219 --iterations 1 --interval 5 --aws
+	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method shutdown_control_plane --target ip-10-0-0-219 --iterations 1 --interval 5 --aws
 	@echo ""
+# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_apiserver --target ip-10-0-0-219 --iterations 1 --interval 5 --aws
+# 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_controller_manager --target ip-10-0-0-219 --iterations 1 --interval 5 --aws
 # 	@echo ""
 # 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_kube_scheduler --target ip-10-0-0-219 --iterations 1 --interval 1 --aws
 # 	@echo ""
-	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_etcd --target ip-10-0-0-219 --iterations 1 --interval 5 --aws --timeout extended
-	@echo ""
+# 	cd kuber_bomber && python3 reliability_tester.py --component control_plane --failure-method kill_etcd --target ip-10-0-0-219 --iterations 1 --interval 5 --aws --timeout extended
+# 	@echo ""
 # 	@echo "✅ Suite completa de testes AWS finalizada!"
 # 	@echo "📁 Resultados salvos em: testes/2025/11/04/component/"
 
+install_requirements:
+	cd kuber_bomber && pip install -r requirements.txt
 
 run_graficos:
 	cd show_graficos && python3 graficos.py
@@ -117,7 +119,7 @@ generate_config_all_aws:
 	cd ./ && python3 -m kuber_bomber.cli.availability_cli --get-config-all --force-aws
 
 ssh_cli_cp:
-	ssh -i ~/.ssh/vockey.pem ubuntu@52.54.56.17
+	ssh -i ~/.ssh/vockey.pem ubuntu@44.204.216.190
 
 ssh_cli_wn:
 	ssh -i ~/.ssh/vockey.pem ubuntu@13.220.170.35

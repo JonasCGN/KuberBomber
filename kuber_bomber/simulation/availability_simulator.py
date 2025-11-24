@@ -2495,10 +2495,7 @@ class AvailabilitySimulator:
                 if hasattr(self, 'availability_criteria'):
                     discovered_apps = list(self.availability_criteria.keys())
                 
-                apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
-                    timeout=180,  # 3 minutos timeout
-                    discovered_apps=discovered_apps
-                )
+                apps_recovered, health_check_time = self.health_checker.wait_for_pods_recovery_combined_silent()
                 
                 if apps_recovered:
                     print(f"  ✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
@@ -2734,10 +2731,7 @@ class AvailabilitySimulator:
                 if hasattr(self, 'availability_criteria'):
                     discovered_apps = list(self.availability_criteria.keys())
                 
-                apps_recovered, health_check_time = self.health_checker.wait_for_recovery(
-                    timeout=180,  # 3 minutos timeout
-                    discovered_apps=discovered_apps
-                )
+                apps_recovered, health_check_time = self.health_checker.wait_for_pods_recovery_combined_silent()
                 
                 if apps_recovered:
                     print(f"  ✅ Aplicações ficaram ativas em {health_check_time:.1f}s (tempo real de espera)")
