@@ -816,9 +816,9 @@ class AvailabilitySimulator:
                 
                 # Calcular tempo médio de recuperação (se houver eventos)
                 mean_recovery_time = 0.0
-                total_downtime = current_time - total_available_time
+                total_downtime = duration_hours - total_available_time
                 
-                current_availability = total_available_time / current_time
+                current_availability = total_downtime / duration_hours
                 
                 # Dados das estatísticas seguindo o padrão existente
                 statistics_data = [
